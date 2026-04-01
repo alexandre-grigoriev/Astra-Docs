@@ -11,7 +11,58 @@
 
 import neo4j from "neo4j-driver";
 import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
 import crypto from "crypto";
+
+export const SUPPORTED_EXTS = ["pdf", "md", "markdown", "docx"];
+
+// ── Text extraction by format ──────────────────────────────────────────────────
+
+async function extractTextFromPdf(buffer) {
+  const parsed = await pdfParse(buffer);
+  return parsed.text;
+}
+
+function extractTextFromMarkdown(buffer) {
+  let text = buffer.toString("utf8");
+  // Remove YAML front matter
+  text = text.replace(/^---[\s\S]*?---\s*\n/m, "");
+  // Remove HTML tags
+  text = text.replace(/<[^>]+>/g, " ");
+  // Remove image references, keep alt text
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => alt || "");
+  // Remove links, keep link text
+  text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // Unwrap code fences (keep content)
+  text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, "$1");
+  // Remove inline code markers
+  text = text.replace(/`([^`]*)`/g, "$1");
+  // Remove heading markers
+  text = text.replace(/^#{1,6}\s+/gm, "");
+  // Remove bold/italic markers
+  text = text.replace(/\*{1,3}([^*\n]+)\*{1,3}/g, "$1");
+  text = text.replace(/_{1,3}([^_\n]+)_{1,3}/g, "$1");
+  // Remove horizontal rules
+  text = text.replace(/^[-*_]{3,}\s*$/gm, "");
+  // Remove blockquote markers
+  text = text.replace(/^>\s?/gm, "");
+  // Collapse excess blank lines
+  text = text.replace(/\n{3,}/g, "\n\n").trim();
+  return text;
+}
+
+async function extractTextFromDocx(buffer) {
+  const result = await mammoth.extractRawText({ buffer });
+  return result.value;
+}
+
+export async function extractText(buffer, filename) {
+  const ext = filename.toLowerCase().split(".").pop();
+  if (ext === "pdf")                    return extractTextFromPdf(buffer);
+  if (ext === "md" || ext === "markdown") return extractTextFromMarkdown(buffer);
+  if (ext === "docx")                   return extractTextFromDocx(buffer);
+  throw new Error(`Unsupported file type: .${ext}. Supported: ${SUPPORTED_EXTS.join(", ")}`);
+}
 
 const GEMINI_KEY  = process.env.GEMINI_API_KEY;
 const EMBED_URL   = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
@@ -160,15 +211,14 @@ async function summarizeDocument(text, filename) {
 export async function ingestDocument({ buffer, filename, uploadedBy, documentDate }) {
   const docId = crypto.randomUUID();
 
-  // 1. Extract text from PDF
+  // 1. Extract text based on file type
   let fullText;
   try {
-    const parsed = await pdfParse(buffer);
-    fullText = parsed.text;
+    fullText = await extractText(buffer, filename);
   } catch (e) {
-    throw new Error(`PDF parse failed: ${e.message}`);
+    throw new Error(`Text extraction failed: ${e.message}`);
   }
-  if (!fullText?.trim()) throw new Error("No text extracted from PDF");
+  if (!fullText?.trim()) throw new Error("No text extracted from document");
 
   // 2. Detect language (assume french, check for english)
   const lang = /\b(the|and|is|are|this|that|with|for)\b/i.test(fullText.slice(0, 500)) ? "en" : "fr";

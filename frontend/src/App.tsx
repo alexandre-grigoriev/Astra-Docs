@@ -1,117 +1,80 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import TalkingHeadAvatar, { type TalkingHeadAvatarHandle } from "./TalkingHeadAvatar";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, LogOut, CheckCircle2 } from "lucide-react";
+import { ChevronDown, LogOut, CheckCircle2, Plus, Trash2, MessageSquare, FolderOpen } from "lucide-react";
 import "./App.css";
-import { type Presentation } from "./services/gemini";
-import { type SlideData } from "./types";
-import { AVATARS, LANGS, LANG_TO_LONG, LONG_TO_LANG } from "./constants";
+import { LANGS } from "./constants";
 import { cn, UserStatusIcon } from "./utils";
 import { TopSelect } from "./components/ui/TopSelect";
-import { ModeTabs } from "./components/ui/ModeTabs";
-import { Card } from "./components/ui/Card";
 import { AuthDialog } from "./components/auth/AuthDialog";
-import { QuizGenerationDialog } from "./components/quiz/QuizGenerationDialog";
 import { AddPdfDialog } from "./components/knowledge-base/AddPdfDialog";
-import { PresentationDialog } from "./components/presentations/PresentationDialog";
-import { CreatePresentationDialog } from "./components/presentations/CreatePresentationDialog";
-import { EditPresentationDialog } from "./components/presentations/EditPresentationDialog";
-import { SlideViewport } from "./components/presentations/SlideViewport";
+import { ValidationDialog } from "./components/admin/ValidationDialog";
 import { ChatPanel } from "./components/chat/ChatPanel";
+import { sendToGemini, type ChatMessage as GeminiMessage } from "./services/gemini";
+import type { ProjectSummary, ChatMessage } from "./types";
+
+function makeId() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+function now()    { return new Date().toISOString(); }
 
 export default function App() {
-  const [user, setUser] = useState<null | { id: string; name: string; email: string; picture?: string; role: "admin" | "contributor" | "user"; provider: string }>(null);
+  const [user, setUser] = useState<null | {
+    id: string; name: string; email: string; picture?: string;
+    role: "admin" | "user"; provider: string;
+  }>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authOpen, setAuthOpen] = useState(false);
+  const [verifiedBanner, setVerifiedBanner] = useState(false);
+  const [pendingBanner, setPendingBanner] = useState(false);
 
-  const [avatar, setAvatar] = useState("alan");
   const [lang, setLang] = useState("fr");
-  const [view, setView] = useState<"chat" | "presentation">("presentation");
+  const [addPdfOpen, setAddPdfOpen] = useState(false);
+  const [validationOpen, setValidationOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
-  const [rightOpen, setRightOpen] = useState(true);
-  const [panelMode, setPanelMode] = useState<"discussion" | "quiz">("discussion");
-  const [quizEnabled, setQuizEnabled] = useState(true);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<Record<string, ChatMessage[]>>({});
+  const [isThinking, setIsThinking] = useState(false);
+  const [input, setInput] = useState("");
 
-  const [rightPanelWidth, setRightPanelWidth] = useState(420);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
+
+  // Resizable splitter
+  const [sidebarWidth, setSidebarWidth] = useState(() => Math.round(window.innerWidth * 0.25));
   const isDragging = useRef(false);
   const mainGridRef = useRef<HTMLElement>(null);
 
-  const [presentationDialogOpen, setPresentationDialogOpen] = useState(false);
-  const [createPresDialogOpen, setCreatePresDialogOpen] = useState(false);
-  const [editPresDialogOpen, setEditPresDialogOpen] = useState(false);
-  const [addPdfOpen, setAddPdfOpen] = useState(false);
-  const [quizGenDialog, setQuizGenDialog] = useState<{ presName: string; presLang: string } | null>(null);
-  const [activePresentationName, setActivePresentationName] = useState<string | null>(null);
-  const [activePresentationLabel, setActivePresentationLabel] = useState("No presentation selected");
+  // ── API helpers ──────────────────────────────────────────────────────────────
 
-  const [presentations, setPresentations] = useState<Presentation[]>([]);
-  const [slides, setSlides] = useState<SlideData[]>([]);
-  const [isPresentationPlaying, setIsPresentationPlaying] = useState(false);
+  async function loadProjects() {
+    try {
+      const res = await fetch("/api/projects", { credentials: "include" });
+      if (res.ok) setProjects(await res.json());
+    } catch {}
+  }
 
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const userMenuRef = useRef<HTMLDivElement | null>(null);
+  async function loadMessages(chatId: string) {
+    if (chatMessages[chatId]) return; // already loaded
+    try {
+      const res = await fetch(`/api/chats/${chatId}/messages`, { credentials: "include" });
+      if (res.ok) { const msgs = await res.json(); setChatMessages((prev) => ({ ...prev, [chatId]: msgs })); }
+    } catch {}
+  }
 
-  const avatarName = useMemo(() => AVATARS.find((a) => a.id === avatar)?.name ?? "Avatar", [avatar]);
-  const avatarRef = useRef<TalkingHeadAvatarHandle>(null);
-  const leftCardRef = useRef<HTMLDivElement>(null);
-
-  const presentationContent = useMemo(() => {
-    if (!slides.length) return "";
-    return slides.map((s, i) => `[Slide ${i + 1}]\n${s.paragraphs.join("\n")}`).join("\n\n");
-  }, [slides]);
-
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const handleSpeak = useCallback((text: string) => {
-    setIsSpeaking(true);
-    avatarRef.current?.speak(text);
-    avatarRef.current?.waitUntilDone().then(() => setIsSpeaking(false));
-  }, []);
-  const handleStopSpeaking = useCallback(() => { setIsSpeaking(false); avatarRef.current?.stopSpeaking(); }, []);
-  const handleWaitUntilDone = useCallback(() => avatarRef.current?.waitUntilDone() ?? Promise.resolve(), []);
-
-  const [avatarPlayingStyle, setAvatarPlayingStyle] = useState<React.CSSProperties>({});
-
-  useLayoutEffect(() => {
-    if (!isPresentationPlaying || view !== "presentation") {
-      setAvatarPlayingStyle({});
-      return;
-    }
-    const update = () => {
-      if (!leftCardRef.current) return;
-      const card = leftCardRef.current.getBoundingClientRect();
-      setAvatarPlayingStyle({
-        position: "fixed",
-        top: card.top + 10,
-        left: card.right - 180,
-        width: 170,
-        height: 220,
-        zIndex: 30,
-        overflow: "hidden",
-        borderRadius: "12px",
-        boxShadow: "0 4px 20px rgba(0,0,0,0.18)",
+  async function saveMessage(chatId: string, msg: ChatMessage) {
+    try {
+      await fetch(`/api/chats/${chatId}/messages`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(msg),
       });
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [isPresentationPlaying, view]);
+    } catch {}
+  }
 
-  const handlePlayingChange = useCallback((playing: boolean, reason: "manual" | "end") => {
-    setIsPresentationPlaying(playing);
-    if (playing) {
-      setRightOpen(false);
-    } else {
-      if (reason === "end") {
-        setRightOpen(true);
-        setPanelMode(quizEnabled ? "quiz" : "discussion");
-      } else {
-        setRightOpen(true);
-        setPanelMode("discussion");
-      }
-    }
-  }, [quizEnabled]);
-
-  const [verifiedBanner, setVerifiedBanner] = useState(false);
+  // ── Auth ─────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -120,14 +83,22 @@ export default function App() {
       window.history.replaceState({}, "", window.location.pathname);
       setTimeout(() => setVerifiedBanner(false), 6000);
     }
-
+    if (params.get("pending") === "1") {
+      setPendingBanner(true);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/auth/me", { credentials: "include" });
         if (cancelled) return;
-        if (res.ok) { setUser(await res.json()); setAuthOpen(false); }
-        else { setUser(null); setAuthOpen(true); }
+        if (res.ok) {
+          const u = await res.json();
+          setUser(u);
+          setAuthOpen(false);
+        } else {
+          setUser(null); setAuthOpen(true);
+        }
       } catch {
         if (!cancelled) { setUser(null); setAuthOpen(true); }
       } finally {
@@ -137,13 +108,26 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  // Load projects + pending count when user is set
   useEffect(() => {
-    fetch("/api/list-presentations", { credentials: "include" })
-      .then((r) => r.json())
-      .then((data: Presentation[]) => { if (Array.isArray(data)) setPresentations(data); })
-      .catch(() => {});
-  }, []);
+    if (user) {
+      loadProjects();
+      if (user.role === "admin") {
+        fetch("/api/users/pending", { credentials: "include" })
+          .then((r) => r.ok ? r.json() : [])
+          .then((data) => setPendingCount(Array.isArray(data) ? data.length : 0))
+          .catch(() => {});
+      }
+    } else {
+      setProjects([]);
+      setPendingCount(0);
+    }
+  }, [user]);
 
+  // Load messages when chat is activated
+  useEffect(() => { if (activeChatId) loadMessages(activeChatId); }, [activeChatId]);
+
+  // Close user menu on outside click
   useEffect(() => {
     function onDown(e: MouseEvent) {
       if (!userMenuOpen) return;
@@ -153,83 +137,12 @@ export default function App() {
     return () => window.removeEventListener("mousedown", onDown);
   }, [userMenuOpen]);
 
-  useEffect(() => {
-    if (view === "presentation" && !activePresentationName) setPresentationDialogOpen(true);
-  }, [view, activePresentationName]);
-
-  async function loadPresentation(name: string, langOverride?: string) {
-    try {
-      const longLang = LANG_TO_LONG[langOverride ?? lang] ?? langOverride ?? "english";
-      const res = await fetch(
-        `/api/presentation-data?file_name=${encodeURIComponent(name)}&language=${encodeURIComponent(longLang)}`,
-        { credentials: "include" }
-      );
-      const data = await res.json();
-      if (data.error) { console.warn("Presentation data error:", data.error); setSlides([]); return; }
-      const rawSlides: Record<string, unknown> = data.slides ?? data;
-      let qEnabled = data.quizEnabled !== false;
-      const slideEntries = Object.entries(rawSlides).filter(([, v]) => {
-        if (Array.isArray(v) && v[0]?.length === 1 && /^quiz:(YES|NO)$/i.test(v[0][0])) {
-          qEnabled = /^quiz:YES$/i.test(v[0][0]);
-          return false;
-        }
-        return true;
-      });
-      setQuizEnabled(qEnabled);
-      if (!qEnabled && panelMode === "quiz") setPanelMode("discussion");
-      const slideArr: SlideData[] = slideEntries.map(([, v]) => ({
-        paragraphs: (v as [string[], string])[0],
-        image: (v as [string[], string])[1],
-      }));
-      setSlides(slideArr);
-      setActivePresentationName(name);
-      setActivePresentationLabel(name);
-      setView("presentation");
-      if (!rightOpen) setRightOpen(true);
-    } catch {
-      setSlides([]);
-    }
-  }
-
-  function openDiscussion() { setRightOpen(true); setPanelMode("discussion"); }
-  function openQuiz()       { setRightOpen(true); setPanelMode("quiz"); }
-
-  async function handleLangChange(newLang: string) {
-    if (view !== "presentation" || !activePresentationName) { setLang(newLang); return; }
-    const longLang = LANG_TO_LONG[newLang] ?? newLang;
-    try {
-      const res = await fetch(`/uploads/${encodeURIComponent(activePresentationName)}/content_${longLang}.txt`, { method: "HEAD" });
-      if (res.ok) { setLang(newLang); loadPresentation(activePresentationName, newLang); }
-    } catch { /* stay on current language */ }
-  }
-
-  function handleViewChange(newView: "chat" | "presentation") {
-    setView(newView);
-    if (!rightOpen) setRightOpen(true);
-  }
-
-  function handleStartPresentation(name: string) {
-    setActivePresentationName(name);
-    setView("presentation");
-    const presLang = LONG_TO_LANG[presentations.find((p) => p.name === name)?.language ?? ""] ?? lang;
-    if (presLang !== lang) setLang(presLang);
-    loadPresentation(name, presLang);
-  }
-
-  function handleContinuePresentation() { handlePlayingChange(true, "manual"); }
-
-  function handleSplitterMouseDown(e: React.MouseEvent) {
-    e.preventDefault();
-    isDragging.current = true;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }
-
+  // Splitter drag
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!isDragging.current || !mainGridRef.current) return;
       const rect = mainGridRef.current.getBoundingClientRect();
-      setRightPanelWidth(Math.max(300, Math.min(rect.width / 2, rect.right - e.clientX)));
+      setSidebarWidth(Math.max(220, Math.min(400, e.clientX - rect.left)));
     }
     function onUp() {
       if (isDragging.current) {
@@ -240,11 +153,160 @@ export default function App() {
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
-    return () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
+    return () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
   }, []);
+
+  // ── Project / chat management ─────────────────────────────────────────────────
+
+  async function createProject() {
+    const name = newProjectName.trim() || "New project";
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        const project = await res.json();
+        setProjects((prev) => [...prev, project]);
+        setActiveProjectId(project.id);
+        setActiveChatId(null);
+      }
+    } catch {}
+    setNewProjectName("");
+    setCreatingProject(false);
+  }
+
+  async function deleteProject(id: string) {
+    try {
+      await fetch(`/api/projects/${id}`, { method: "DELETE", credentials: "include" });
+      setProjects((prev) => prev.filter((p) => p.id !== id));
+      if (activeProjectId === id) { setActiveProjectId(null); setActiveChatId(null); }
+    } catch {}
+  }
+
+  async function createChat(projectId: string) {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/chats`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New chat" }),
+      });
+      if (res.ok) {
+        const chat = await res.json();
+        setProjects((prev) => prev.map((p) =>
+          p.id === projectId ? { ...p, chats: [...p.chats, chat] } : p
+        ));
+        setActiveProjectId(projectId);
+        setActiveChatId(chat.id);
+        setChatMessages((prev) => ({ ...prev, [chat.id]: [] }));
+      }
+    } catch {}
+  }
+
+  async function deleteChat(projectId: string, chatId: string) {
+    try {
+      await fetch(`/api/chats/${chatId}`, { method: "DELETE", credentials: "include" });
+      setProjects((prev) => prev.map((p) =>
+        p.id === projectId ? { ...p, chats: p.chats.filter((c) => c.id !== chatId) } : p
+      ));
+      setChatMessages((prev) => { const n = { ...prev }; delete n[chatId]; return n; });
+      if (activeChatId === chatId) setActiveChatId(null);
+    } catch {}
+  }
+
+  // ── Message sending ───────────────────────────────────────────────────────────
+
+  const send = useCallback(async (text?: string) => {
+    const v = (text ?? input).trim();
+    if (!v || isThinking) return;
+    setInput("");
+
+    // Auto-create project + chat if none active
+    let projId = activeProjectId;
+    let chatId = activeChatId;
+
+    if (!projId) {
+      try {
+        const res = await fetch("/api/projects", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "Default" }),
+        });
+        if (res.ok) {
+          const project = await res.json();
+          setProjects((prev) => [...prev, project]);
+          projId = project.id;
+          setActiveProjectId(projId);
+        }
+      } catch { return; }
+    }
+
+    if (!chatId) {
+      try {
+        const res = await fetch(`/api/projects/${projId}/chats`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: v.slice(0, 40) }),
+        });
+        if (res.ok) {
+          const chat = await res.json();
+          setProjects((prev) => prev.map((p) =>
+            p.id === projId ? { ...p, chats: [...p.chats, chat] } : p
+          ));
+          chatId = chat.id;
+          setActiveChatId(chatId);
+          setChatMessages((prev) => ({ ...prev, [chatId!]: [] }));
+        }
+      } catch { return; }
+    }
+
+    const userMsg: ChatMessage = { id: makeId(), role: "user", text: v, timestamp: now() };
+    setChatMessages((prev) => ({ ...prev, [chatId!]: [...(prev[chatId!] ?? []), userMsg] }));
+    await saveMessage(chatId!, userMsg);
+    setIsThinking(true);
+
+    // Update chat title from first message
+    const currentMessages = chatMessages[chatId!] ?? [];
+    if (currentMessages.length === 0) {
+      const title = v.slice(0, 40);
+      fetch(`/api/chats/${chatId}`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      }).then(() => {
+        setProjects((prev) => prev.map((p) =>
+          p.id === projId
+            ? { ...p, chats: p.chats.map((c) => c.id === chatId ? { ...c, title } : c) }
+            : p
+        ));
+      }).catch(() => {});
+    }
+
+    try {
+      const history: GeminiMessage[] = (chatMessages[chatId!] ?? []).map((m) => ({
+        role: m.role, text: m.text,
+      }));
+      const response = await sendToGemini(v, history, lang);
+      const botMsg: ChatMessage = { id: makeId(), role: "assistant", text: response, timestamp: now() };
+      setChatMessages((prev) => ({ ...prev, [chatId!]: [...(prev[chatId!] ?? []), botMsg] }));
+      await saveMessage(chatId!, botMsg);
+    } catch {
+      const errMsg: ChatMessage = { id: makeId(), role: "assistant", text: "Sorry, an error occurred. Please try again.", timestamp: now() };
+      setChatMessages((prev) => ({ ...prev, [chatId!]: [...(prev[chatId!] ?? []), errMsg] }));
+      await saveMessage(chatId!, errMsg);
+    } finally {
+      setIsThinking(false);
+    }
+  }, [input, isThinking, activeProjectId, activeChatId, chatMessages, lang]);
+
+  // ── Derived state ─────────────────────────────────────────────────────────────
+
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  const activeChat = activeProject?.chats.find((c) => c.id === activeChatId) ?? null;
+  const activeMessages = activeChatId ? (chatMessages[activeChatId] ?? []) : [];
+
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="appRoot">
@@ -253,14 +315,11 @@ export default function App() {
           <div className="brandLeft">
             <img className="brandHoriba" src="/screen logo Horiba.png" alt="HORIBA" />
           </div>
-
-          <div className="topControls">
-            <TopSelect imgSrc="/person.png" value={avatar} options={AVATARS} onChange={setAvatar} />
-            <TopSelect imgSrc="/language.png" value={lang} options={LANGS} onChange={handleLangChange} />
-            <ModeTabs view={view} setView={handleViewChange} />
-          </div>
+          <span className="brandName">Astra Docs</span>
 
           <div className="topRight" ref={userMenuRef}>
+            <TopSelect imgSrc="/language.png" value={lang} options={LANGS} onChange={setLang} />
+
             <button className="userBtn" onClick={() => setUserMenuOpen((v) => !v)} title={user?.email ?? "Sign in"}>
               <span className="userAvatar">
                 <UserStatusIcon email={user?.email} className="h-5 w-5" />
@@ -288,31 +347,30 @@ export default function App() {
                     <button className="blueBtn w-full" onClick={() => setAuthOpen(true)}>Sign in</button>
                   ) : (
                     <>
-                      {(user.role === "admin" || user.role === "contributor") && (
+                      {user.role === "admin" && (
                         <>
                           <button className="ghostBtn w-full" style={{ justifyContent: "flex-start" }}
-                            onClick={() => { setCreatePresDialogOpen(true); setUserMenuOpen(false); }}>
-                            +  Create presentation...
+                            onClick={() => { setAddPdfOpen(true); setUserMenuOpen(false); }}>
+                            ⊕  Knowledge base…
                           </button>
-                          <button className="ghostBtn w-full" style={{ justifyContent: "flex-start" }}
-                            onClick={() => { setEditPresDialogOpen(true); setUserMenuOpen(false); }}>
-                            ✎  Edit presentations...
+                          <button
+                            className="ghostBtn w-full"
+                            style={{ justifyContent: "flex-start", opacity: pendingCount === 0 ? 0.45 : 1 }}
+                            disabled={pendingCount === 0}
+                            onClick={() => { setValidationOpen(true); setUserMenuOpen(false); }}
+                          >
+                            ✓  Validate users
+                            {pendingCount > 0 && <span className="validationBadge">{pendingCount}</span>}
                           </button>
                         </>
-                      )}
-                      {user.role === "admin" && (
-                        <button className="ghostBtn w-full" style={{ justifyContent: "flex-start" }}
-                          onClick={() => { setAddPdfOpen(true); setUserMenuOpen(false); }}>
-                          ⊕  Knowledge base…
-                        </button>
                       )}
                       <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "5px 0" }} />
                       <button className="ghostBtn w-full"
                         onClick={async () => {
                           try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }); } catch {}
                           setUser(null); setAuthOpen(true); setUserMenuOpen(false);
-                        }}
-                      >
+                          setProjects([]); setActiveProjectId(null); setActiveChatId(null);
+                        }}>
                         <LogOut className="h-4 w-4" /> Sign out
                       </button>
                     </>
@@ -324,152 +382,112 @@ export default function App() {
         </div>
       </header>
 
-      <main
-        ref={mainGridRef}
-        className={cn("mainGrid", rightOpen ? "gridWithRight" : "gridNoRight")}
-        style={rightOpen ? { gridTemplateColumns: `1fr auto ${rightPanelWidth}px` } : undefined}
-      >
-        <Card className="leftCard" ref={leftCardRef}>
-          {(!isPresentationPlaying || view === "chat") && (
-            <div className="leftHeader">
-              <div>
-                <div className="leftTitle">{view === "presentation" ? "Presentation" : "Avatar"}</div>
-                <div className="leftSub">
-                  {view === "presentation" ? activePresentationLabel : `Person: ${avatarName}`}
-                </div>
-              </div>
+      <main ref={mainGridRef} className="mainGrid" style={{ gridTemplateColumns: `${sidebarWidth}px auto 1fr` }}>
+        {/* Sidebar */}
+        <aside className="sidebar">
+          <div className="sidebarHeader">
+            <span className="sidebarTitle">Projects</span>
+            <button className="iconBtn" title="New project" onClick={() => setCreatingProject(true)}>
+              <Plus className="h-5 w-5" />
+            </button>
+          </div>
 
-              {view === "presentation" ? (
-                <div className="leftHeaderBtns">
-                  <button className="ghostBtn" onClick={() => setPresentationDialogOpen(true)}>Select...</button>
-                  <div className="modeTabs">
-                    <button className={cn("modeTab", panelMode === "discussion" && "modeTabActive")} onClick={openDiscussion}>Discussion</button>
-                    <button className={cn("modeTab", panelMode === "quiz" && "modeTabActive")} onClick={openQuiz}
-                      disabled={!quizEnabled} style={!quizEnabled ? { opacity: 0.4, cursor: "not-allowed" } : undefined}>
-                      Quiz
-                    </button>
-                  </div>
-                </div>
-              ) : view === "chat" ? (
-                <div className="leftHeaderBtns">
-                  {!rightOpen && <button className="ghostBtn" onClick={openDiscussion}>Chat</button>}
-                  {isSpeaking && (
-                    <button className="avatarStopBtn" onClick={handleStopSpeaking} title="Stop speaking">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
-                    </button>
-                  )}
-                </div>
-              ) : null}
+          {creatingProject && (
+            <div className="sidebarNewProject">
+              <input
+                className="sidebarInput"
+                autoFocus
+                placeholder="Project name…"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") createProject();
+                  if (e.key === "Escape") { setCreatingProject(false); setNewProjectName(""); }
+                }}
+              />
+              <div className="sidebarInputActions">
+                <button className="blueBtn" style={{ padding: "6px 12px", fontSize: 13 }} onClick={createProject}>Create</button>
+                <button className="ghostBtn" style={{ padding: "6px 12px", fontSize: 13 }}
+                  onClick={() => { setCreatingProject(false); setNewProjectName(""); }}>Cancel</button>
+              </div>
             </div>
           )}
 
-          <div className="leftBody" style={{ position: "relative" }}>
-            {view === "presentation" && (
-              <SlideViewport
-                slides={slides}
-                presentationName={activePresentationName ?? ""}
-                onEnd={quizEnabled ? openQuiz : openDiscussion}
-                onSpeak={handleSpeak}
-                onStopSpeaking={handleStopSpeaking}
-                onWaitUntilDone={handleWaitUntilDone}
-                onPlayingChange={handlePlayingChange}
-                avatarHidden={isPresentationPlaying}
-              />
+          <div className="sidebarProjects">
+            {projects.length === 0 && !creatingProject && (
+              <div className="sidebarEmpty">No projects yet.<br />Create one to get started.</div>
             )}
-            <div
-              className={view === "presentation" && !isPresentationPlaying ? "avatarOverlay" : view === "chat" ? "avatarStage" : undefined}
-              style={isPresentationPlaying ? avatarPlayingStyle : undefined}
-            >
-              <TalkingHeadAvatar ref={avatarRef} avatar={avatar} lang={lang} />
-            </div>
-          </div>
-        </Card>
+            {projects.map((project) => (
+              <div key={project.id} className="projectGroup">
+                <div
+                  className={cn("projectRow", activeProjectId === project.id && "projectRowActive")}
+                  onClick={() => {
+                    setActiveProjectId(project.id);
+                    if (activeChatId && !project.chats.find((c) => c.id === activeChatId)) setActiveChatId(null);
+                  }}
+                >
+                  <FolderOpen className="h-5 w-5 flex-shrink-0" />
+                  <span className="projectName">{project.name}</span>
+                  <div className="projectActions">
+                    <button className="sidebarIconBtn" title="New chat"
+                      onClick={(e) => { e.stopPropagation(); createChat(project.id); }}>
+                      <Plus className="h-5 w-5" />
+                    </button>
+                    <button className="sidebarIconBtn sidebarIconBtnDanger" title="Delete project"
+                      onClick={(e) => { e.stopPropagation(); deleteProject(project.id); }}>
+                      <Trash2 className="h-5 w-5" />
+                    </button>
+                  </div>
+                </div>
 
-        {rightOpen && (
-          <div className="splitter" onMouseDown={handleSplitterMouseDown}>
-            <div className="splitterLine" />
+                {activeProjectId === project.id && project.chats.map((chat) => (
+                  <div
+                    key={chat.id}
+                    className={cn("chatRow", activeChatId === chat.id && "chatRowActive")}
+                    onClick={() => { setActiveProjectId(project.id); setActiveChatId(chat.id); }}
+                  >
+                    <MessageSquare className="h-5 w-5 flex-shrink-0" />
+                    <span className="chatRowTitle">{chat.title}</span>
+                    <button className="sidebarIconBtn sidebarIconBtnDanger" title="Delete chat"
+                      onClick={(e) => { e.stopPropagation(); deleteChat(project.id, chat.id); }}>
+                      <Trash2 className="h-5 w-5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
-        )}
+        </aside>
 
+        {/* Splitter */}
+        <div className="splitter" onMouseDown={(e) => {
+          e.preventDefault(); isDragging.current = true;
+          document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+        }}>
+          <div className="splitterLine" />
+        </div>
+
+        {/* Chat */}
         <ChatPanel
-          open={rightOpen}
-          onClose={() => setRightOpen(false)}
-          panelMode={panelMode}
+          chat={activeChat}
+          messages={activeMessages}
           lang={lang}
-          onSpeak={handleSpeak}
-          onStopSpeaking={handleStopSpeaking}
-          presentations={presentations}
-          presentationContent={presentationContent}
-          presentationName={activePresentationName ?? ""}
-          userName={user?.name ?? user?.email}
-          userEmail={user?.email}
-          onStartPresentation={handleStartPresentation}
-          onContinuePresentation={handleContinuePresentation}
-          onSwitchToChat={() => handleViewChange("chat")}
+          isThinking={isThinking}
+          input={input}
+          onInputChange={setInput}
+          onSend={send}
         />
       </main>
 
-      <div className="footerNote">HORIBA FRANCE 2026. ALL RIGHTS RESERVED</div>
-
-      {quizGenDialog && (
-        <QuizGenerationDialog
-          presName={quizGenDialog.presName}
-          presLang={quizGenDialog.presLang}
-          onClose={() => setQuizGenDialog(null)}
-          onQuizSaved={() => { setQuizGenDialog(null); loadPresentation(quizGenDialog.presName); }}
-        />
-      )}
-
-      <EditPresentationDialog
-        open={editPresDialogOpen}
-        onClose={() => {
-          setEditPresDialogOpen(false);
-          fetch("/api/list-presentations", { credentials: "include" })
-            .then(r => r.json()).then((data: Presentation[]) => { if (Array.isArray(data)) setPresentations(data); }).catch(() => {});
-        }}
-        userRole={user?.role ?? "user"}
-        defaultLang={lang}
-      />
-
-      <CreatePresentationDialog
-        open={createPresDialogOpen}
-        onClose={() => setCreatePresDialogOpen(false)}
-        onQuizReady={(presName, presLang) => setQuizGenDialog({ presName, presLang })}
-        defaultLang={lang}
-        onImported={(name, presLang) => {
-          setActivePresentationName(name);
-          setView("presentation");
-          fetch("/api/list-presentations", { credentials: "include" })
-            .then(r => r.json())
-            .then((data: Presentation[]) => { if (Array.isArray(data)) setPresentations(data); })
-            .catch(() => {})
-            .finally(() => loadPresentation(name, presLang));
-        }}
-      />
+      <div className="footerNote">Astra Docs — HORIBA FRANCE 2026</div>
 
       {addPdfOpen && <AddPdfDialog open={addPdfOpen} onClose={() => setAddPdfOpen(false)} />}
 
-      <PresentationDialog
-        open={presentationDialogOpen}
-        onClose={() => { setPresentationDialogOpen(false); if (!activePresentationName) setView("chat"); }}
-        presentations={presentations}
-        onSelect={(name) => loadPresentation(name)}
+      <ValidationDialog
+        open={validationOpen}
+        onClose={() => setValidationOpen(false)}
+        onCountChange={setPendingCount}
       />
-
-      <AnimatePresence>
-        {verifiedBanner && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
-            style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
-              background: "#16a34a", color: "#fff", padding: "12px 24px", borderRadius: 10,
-              fontSize: 14, fontWeight: 600, boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
-              display: "flex", alignItems: "center", gap: 8 }}
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Email confirmed! You can now sign in.
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       <AuthDialog
         open={!authLoading && authOpen && !user}
@@ -478,10 +496,41 @@ export default function App() {
         }}
         onSuccess={() => {
           fetch("/api/auth/me", { credentials: "include" })
-            .then(r => r.ok ? r.json() : null)
-            .then(u => { if (u) { setUser(u); setAuthOpen(false); } });
+            .then((r) => r.ok ? r.json() : null)
+            .then((u) => { if (u) { setUser(u); setAuthOpen(false); } });
         }}
       />
+
+      <AnimatePresence>
+        {verifiedBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}
+            style={{
+              position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+              background: "#16a34a", color: "#fff", padding: "12px 24px", borderRadius: 10,
+              fontSize: 14, fontWeight: 600, boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+              display: "flex", alignItems: "center", gap: 8,
+            }}
+          >
+            <CheckCircle2 className="h-5 w-5" />
+            Email confirmed! Your account is awaiting admin approval.
+          </motion.div>
+        )}
+        {pendingBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
+            style={{
+              position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+              background: "#f59e0b", color: "#fff", padding: "12px 24px", borderRadius: 10,
+              fontSize: 14, fontWeight: 600, boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+              display: "flex", alignItems: "center", gap: 8, maxWidth: "90vw", textAlign: "center",
+            }}
+          >
+            ⏳ Your account is awaiting admin approval. You will receive an email once validated.
+            <button onClick={() => setPendingBanner(false)} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", marginLeft: 8, fontSize: 16 }}>✕</button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

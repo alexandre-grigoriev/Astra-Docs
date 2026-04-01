@@ -1,8 +1,3 @@
-export const AVATARS = [
-  { id: "alan", name: "Alan" },
-  { id: "ada",  name: "Ada"  },
-];
-
 export const LANGS = [
   { id: "en", name: "English"  },
   { id: "fr", name: "French"   },
@@ -12,56 +7,29 @@ export const LANGS = [
   { id: "ar", name: "Arabic"   },
 ];
 
-export const LANG_TO_LONG: Record<string, string> = { en: "english", fr: "french", ar: "arabic", ja: "japanese", zh: "chinese", ru: "russian" };
-export const LONG_TO_LANG: Record<string, string> = { english: "en", french: "fr", arabic: "ar", japanese: "ja", chinese: "zh", russian: "ru" };
-
-export const UI_STRINGS: Record<string, {
-  welcome: string;
-  startPresentation: (name: string) => string;
-  resuming: string;
-  switchingChat: string;
-  error: string;
-}> = {
+export const UI_STRINGS: Record<string, { welcome: string; error: string }> = {
   en: {
-    welcome: "Hello! I'm your HORIBA assistant. How can I help you?",
-    startPresentation: (name) => `Starting presentation: "${name}"`,
-    resuming: "Resuming presentation...",
-    switchingChat: "Switching to chat mode.",
+    welcome: "Hello! I'm your Astra Docs assistant. Ask me anything about the documentation.",
     error: "Sorry, I encountered an error. Please try again.",
   },
   fr: {
-    welcome: "Bonjour\u00a0! Je suis votre assistant HORIBA. Comment puis-je vous aider\u00a0?",
-    startPresentation: (name) => `Démarrage de la présentation\u00a0: «\u00a0${name}\u00a0»`,
-    resuming: "Reprise de la présentation...",
-    switchingChat: "Passage en mode discussion.",
+    welcome: "Bonjour\u00a0! Je suis votre assistant Astra Docs. Posez-moi vos questions sur la documentation.",
     error: "Désolé, une erreur s'est produite. Veuillez réessayer.",
   },
   ar: {
-    welcome: "مرحباً! أنا مساعدك في HORIBA. كيف يمكنني مساعدتك؟",
-    startPresentation: (name) => `بدء العرض التقديمي: "${name}"`,
-    resuming: "استئناف العرض التقديمي...",
-    switchingChat: "التبديل إلى وضع المحادثة.",
+    welcome: "مرحباً! أنا مساعد Astra Docs. اسألني أي شيء عن الوثائق.",
     error: "عذراً، حدث خطأ. يرجى المحاولة مرة أخرى.",
   },
   ja: {
-    welcome: "こんにちは！HORIBAのアシスタントです。どのようにお手伝いできますか？",
-    startPresentation: (name) => `プレゼンテーションを開始します：「${name}」`,
-    resuming: "プレゼンテーションを再開します...",
-    switchingChat: "チャットモードに切り替えます。",
+    welcome: "こんにちは！Astra Docsのアシスタントです。ドキュメントについて何でもお聞きください。",
     error: "エラーが発生しました。もう一度お試しください。",
   },
   zh: {
-    welcome: "您好！我是您的HORIBA助手。有什么可以帮助您的吗？",
-    startPresentation: (name) => `开始演示："${name}"`,
-    resuming: "继续演示...",
-    switchingChat: "切换到聊天模式。",
+    welcome: "您好！我是 Astra Docs 助手。请随时向我询问有关文档的问题。",
     error: "抱歉，发生了错误。请再试一次。",
   },
   ru: {
-    welcome: "Здравствуйте! Я ваш ассистент HORIBA. Чем могу помочь?",
-    startPresentation: (name) => `Начинаю презентацию: «${name}»`,
-    resuming: "Возобновляю презентацию...",
-    switchingChat: "Переключаюсь в режим чата.",
+    welcome: "Здравствуйте! Я ваш ассистент Astra Docs. Задайте мне любой вопрос по документации.",
     error: "Извините, произошла ошибка. Пожалуйста, попробуйте ещё раз.",
   },
 };

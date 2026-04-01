@@ -50,11 +50,39 @@ for (const col of [
   "ALTER TABLE users ADD COLUMN verified      INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE users ADD COLUMN verify_token  TEXT",
   "ALTER TABLE users ADD COLUMN verify_expires TEXT",
+  "ALTER TABLE users ADD COLUMN status        TEXT NOT NULL DEFAULT 'approved'",
 ]) {
   try { db.exec(col); } catch { /* column already exists */ }
 }
 
+// Ensure LDAP / Google / seed accounts are always approved
+db.exec("UPDATE users SET status='approved' WHERE provider IN ('google','ldap','seed') AND status != 'approved'");
+
 db.exec("UPDATE users SET verified = 1 WHERE provider = 'google' AND verified = 0");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS projects (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS chats (
+    id         TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL DEFAULT 'New chat',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id         TEXT PRIMARY KEY,
+    chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    text       TEXT NOT NULL,
+    timestamp  TEXT DEFAULT (datetime('now'))
+  );
+`);
 
 db.prepare(`
   INSERT INTO users (id, email, name, role, provider, verified)

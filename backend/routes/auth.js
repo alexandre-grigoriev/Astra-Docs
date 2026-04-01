@@ -105,8 +105,8 @@ router.get("/api/auth/verify", (req, res) => {
   const user = stmtFindByToken.get(token);
   if (!user) return res.send(verifiedErrorPage("Invalid or already used verification link."));
   if (new Date(user.verify_expires) < new Date()) return res.send(verifiedErrorPage("This verification link has expired. Please register again."));
-  db.prepare("UPDATE users SET verified=1, verify_token=NULL, verify_expires=NULL WHERE id=?").run(user.id);
-  res.redirect(`${FRONTEND_ORIGIN}?verified=1`);
+  db.prepare("UPDATE users SET verified=1, status='pending', verify_token=NULL, verify_expires=NULL WHERE id=?").run(user.id);
+  res.redirect(`${FRONTEND_ORIGIN}?pending=1`);
 });
 
 // ── Email login ───────────────────────────────────────────────────────────────
@@ -118,6 +118,8 @@ router.post("/api/auth/login", async (req, res) => {
     if (!user) return res.status(401).json({ error: "Invalid email or password" });
     if (!user.password_hash) return res.status(401).json({ error: "This account uses Google Sign-In. Please use the Google button.", code: "google_account" });
     if (!user.verified) return res.status(403).json({ error: "Please verify your email before signing in. Check your inbox.", code: "unverified" });
+    if (user.status === "pending") return res.status(403).json({ error: "Your account is awaiting admin approval. You will receive an email once validated.", code: "pending_approval" });
+    if (user.status === "rejected") return res.status(403).json({ error: "Your access request has been denied. Please contact an administrator.", code: "rejected" });
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) return res.status(401).json({ error: "Invalid email or password" });
     db.prepare("UPDATE users SET last_login=datetime('now') WHERE id=?").run(user.id);

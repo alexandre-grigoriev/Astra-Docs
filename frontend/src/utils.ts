@@ -2,12 +2,12 @@ import React from "react";
 import { Shield, Building2, Star, User } from "lucide-react";
 import { ADMIN_EMAILS, TRUSTED_USERS, UI_STRINGS } from "./constants";
 
-export function cn(...classes: Array<string | false | undefined | null>) {
-  return classes.filter(Boolean).join(" ");
-}
-
 export function t(lang: string) {
   return UI_STRINGS[lang] ?? UI_STRINGS.en;
+}
+
+export function cn(...classes: Array<string | false | undefined | null>) {
+  return classes.filter(Boolean).join(" ");
 }
 
 export function getUserStatus(email: string | undefined): string {

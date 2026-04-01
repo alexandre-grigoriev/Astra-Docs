@@ -8,8 +8,8 @@ import cookieParser from "cookie-parser";
 import { UPLOADS_DIR, FRONTEND_ORIGIN, PORT } from "./shared.js";
 import { router as authRouter, initGoogle } from "./routes/auth.js";
 import { router as usersRouter } from "./routes/users.js";
-import { router as presentationsRouter } from "./routes/presentations.js";
 import { router as knowledgeBaseRouter } from "./routes/knowledgeBase.js";
+import { router as conversationsRouter } from "./routes/conversations.js";
 import { initKnowledgeBase } from "./kb.js";
 
 const app = express();
@@ -22,8 +22,8 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use(authRouter);
 app.use(usersRouter);
-app.use(presentationsRouter);
 app.use(knowledgeBaseRouter);
+app.use(conversationsRouter);
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 await initGoogle();
