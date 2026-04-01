@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(gh:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls e:/Projects/Avatar/frontend/*.json)",
+      "Bash(npm run:*)",
+      "Bash(grep -v \"^TalkingHead$\")",
+      "Bash(grep -n 'isPlaying ? \"\"/stop' e:/Projects/Avatar/frontend/src/App.tsx)",
+      "Bash(where gh:*)"
+    ]
+  }
+}
