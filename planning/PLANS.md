@@ -63,6 +63,7 @@ Two-panel layout separated by a resizable splitter (default ratio **1:3**, left:
 #### Right Panel — Chat
 
 - Markdown-rendered assistant responses
+- Images from retrieved KB chunks displayed below the assistant response bubble
 - Full multi-turn history per chat (context-aware)
 - Voice input (Web Speech API)
 - Language selector (EN / FR / AR / JA / ZH / RU)
@@ -110,13 +111,23 @@ Two-panel layout separated by a resizable splitter (default ratio **1:3**, left:
 | Format   | Parser            |
 |----------|-------------------|
 | PDF      | `pdf-parse`       |
-| Markdown | Built-in regex stripper (removes YAML front matter, syntax markers, keeps text and alt text) |
+| Markdown | Built-in regex stripper (removes YAML front matter, syntax markers); image references replaced with inline `[IMAGE_REF:path]` tokens to preserve position through chunking |
 | DOCX     | `mammoth`         |
 
 #### Upload Modes
 
 - **Single document** (Add document tab): PDF, MD, or DOCX; optional document date
-- **Batch / ZIP** (Batch processing tab): upload a `.zip` archive → backend extracts all supported files, skips images and unsupported formats; each entry's last-modified date from the ZIP is used as `documentDate`
+- **Batch / ZIP** (Batch processing tab): upload a `.zip` archive → backend extracts all supported files; image files (`png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`, `bmp`) are collected separately and associated with their parent Markdown document by folder structure; each entry's last-modified date from the ZIP is used as `documentDate`
+
+#### Image Handling (Markdown + ZIP)
+
+When a `.md` file is uploaded inside a ZIP archive that also contains image files:
+
+1. All image files in the ZIP are collected into an in-memory map keyed by their full ZIP path
+2. `[IMAGE_REF:path]` tokens injected during Markdown parsing are resolved against the MD file's folder in the ZIP (e.g., `Block/Design.md` + `./Design/Blocks.png` → ZIP path `Block/Design/Blocks.png`)
+3. Resolved images are saved to disk at `uploads/kb-images/<docId>/<relative-path>`, **preserving the subfolder structure** to avoid filename collisions across different folders
+4. Each `KBChunk` node stores the resolved public URLs of images that appeared within it
+5. Images are served via the existing `/uploads` static route
 
 #### Real-time Progress (Batch)
 
@@ -131,17 +142,19 @@ Batch ingestion uses **Server-Sent Events (SSE)**:
 
 For each document:
 
-1. **Text extraction** — by file extension (PDF / MD / DOCX)
+1. **Text extraction** — by file extension (PDF / MD / DOCX); for Markdown, image refs become `[IMAGE_REF:path]` tokens
 2. **Language detection** — heuristic on first 500 chars (English vs French default)
 3. **Document summary** — Gemini call on first 3000 chars; used as context for enrichment
-4. **Chunking** — 500-word chunks, 50-word overlap
-5. **LLM enrichment per chunk** (single Gemini call):
+4. **Chunking** — 500-word chunks, 50-word overlap (IMAGE_REF tokens travel with their surrounding text)
+5. **Image extraction** — `[IMAGE_REF:path]` tokens stripped from each chunk; resolved to public URLs using the saved image map; stored as `images: string[]` on the chunk; clean text used for enrichment
+6. **LLM enrichment per chunk** (single Gemini call):
    - Rewrites chunk as self-contained text (resolves pronouns, injects context prefix)
    - Extracts named entities with canonical keys, types, descriptions
    - Extracts relations between entities
-6. **Embedding** — `gemini-embedding-001` (3072 dims) on enriched text
-7. **Neo4j graph construction**:
+7. **Embedding** — `gemini-embedding-001` (3072 dims) on enriched text
+8. **Neo4j graph construction**:
    - `KBDocument` node → `HAS_CHUNK` → `KBChunk` nodes → `NEXT` sequential links
+   - `KBChunk` stores `images: string[]` (public URLs)
    - `KBChunk` → `MENTIONS` → `KBEntity` nodes (merged by canonical key)
    - `KBEntity` → `RELATED_TO { relation }` → `KBEntity`
 
@@ -153,8 +166,11 @@ For each document:
 2. Run 4 retrieval strategies in parallel (see §1)
 3. Expand top-K chunks with sequential neighbors
 4. **Auto-translate** retrieved French chunks to the user's selected language (Gemini batch call) — skipped when target language is French
-5. Inject translated chunks + sources into the Gemini chat prompt
-6. Stream response back to frontend
+5. Label each chunk with its **actual filename** from the KB (not anonymous `[source 1]` labels)
+6. Collect `images` arrays from all retrieved chunks; deduplicate into a flat list of public URLs
+7. Inject translated chunks + sources into the Gemini chat prompt
+8. Gemini response naturally cites document names, since chunks are labeled with them
+9. Return `{ text, images }` to frontend; images displayed below the assistant response bubble
 
 ---
 
@@ -176,7 +192,7 @@ users → projects → chats → messages
 ### 8. Non-Functional Requirements
 
 - Cookie-based sessions (7-day TTL, in-memory store — lost on restart)
-- SMTP email (Nodemailer): verification, approval, rejection emails
+- SMTP email (Nodemailer, sender: "HORIBA Astra Knowledge System"): verification, approval, rejection emails
 - DNS IPv4 resolution for SMTP host at startup
 - Role-based access control enforced server-side (`requireAuth`, `requireAdmin` middleware)
 - Multer file size limits: 50 MB (single), 200 MB (batch ZIP)

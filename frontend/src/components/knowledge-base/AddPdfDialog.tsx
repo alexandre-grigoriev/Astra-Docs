@@ -23,6 +23,7 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
   // Batch
   const [batchFile, setBatchFile] = useState<File | null>(null);
   const [batchRunning, setBatchRunning] = useState(false);
+  const [batchDone, setBatchDone] = useState(false);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressEntry[]>([]);
 
@@ -90,7 +91,7 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   async function doBatch() {
     if (!batchFile) return;
-    setBatchRunning(true); setProgress([]); setCurrentFile(null); setError("");
+    setBatchRunning(true); setBatchDone(false); setProgress([]); setCurrentFile(null); setError("");
 
     // 1. Upload ZIP, get jobId
     let jobId: string;
@@ -129,6 +130,7 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
     es.addEventListener("done", () => {
       es.close();
       setBatchRunning(false);
+      setBatchDone(true);
       setCurrentFile(null);
       setBatchFile(null);
       if (batchInputRef.current) batchInputRef.current.value = "";
@@ -266,6 +268,11 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
                         {currentFile && (
                           <div style={{ fontSize: 13, color: "#6b7280", fontFamily: "monospace" }}>
                             ⚙ {currentFile}…
+                          </div>
+                        )}
+                        {batchDone && (
+                          <div style={{ fontSize: 13, color: "#6b7280", fontFamily: "monospace", marginTop: 4 }}>
+                            Done.
                           </div>
                         )}
                       </div>

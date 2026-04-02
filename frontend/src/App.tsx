@@ -287,8 +287,8 @@ export default function App() {
       const history: GeminiMessage[] = (chatMessages[chatId!] ?? []).map((m) => ({
         role: m.role, text: m.text,
       }));
-      const response = await sendToGemini(v, history, lang);
-      const botMsg: ChatMessage = { id: makeId(), role: "assistant", text: response, timestamp: now() };
+      const { text: response, images } = await sendToGemini(v, history, lang);
+      const botMsg: ChatMessage = { id: makeId(), role: "assistant", text: response, timestamp: now(), images };
       setChatMessages((prev) => ({ ...prev, [chatId!]: [...(prev[chatId!] ?? []), botMsg] }));
       await saveMessage(chatId!, botMsg);
     } catch {

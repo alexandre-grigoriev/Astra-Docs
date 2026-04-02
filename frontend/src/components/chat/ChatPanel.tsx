@@ -59,6 +59,13 @@ export function ChatPanel({
                 {m.role === "assistant"
                   ? <div className="mdContent"><ReactMarkdown>{m.text}</ReactMarkdown></div>
                   : m.text}
+                {m.role === "assistant" && m.images && m.images.length > 0 && (
+                  <div className="msgImages">
+                    {m.images.map((url) => (
+                      <img key={url} src={url} alt="" className="msgImage" />
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))}

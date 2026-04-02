@@ -129,6 +129,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter,
 .mdContent em { font-style: italic; }
 .mdContent code { background: #f3f4f6; border-radius: 4px; padding: 1px 5px; font-size: 13px; }
 .mdContent pre { background: #f3f4f6; border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 6px 0; }
+.mdContent img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); margin: 8px 0; display: block; }
 
 /* ===== Chat input ===== */
 .chatInputRow { margin-top: 10px; display: flex; gap: 8px; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 8px 12px; background: #fff; flex-shrink: 0; }
@@ -138,6 +139,10 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter,
 .chatInputIconBtn:hover { opacity: 0.7; }
 .chatInputIcon { width: auto; height: auto; object-fit: contain; }
 .chatMicRecording { background: rgba(229,62,62,0.1) !important; }
+
+/* ===== Message images ===== */
+.msgImages { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; max-width: 95%; }
+.msgImage { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; }
 
 /* ===== Thinking indicator ===== */
 .msgBubbleThinking { display: flex; align-items: center; gap: 5px; padding: 10px 14px; }

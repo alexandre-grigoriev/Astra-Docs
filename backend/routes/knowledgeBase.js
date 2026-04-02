@@ -5,8 +5,11 @@ import express from "express";
 import multer from "multer";
 import JSZip from "jszip";
 import crypto from "crypto";
+import fs from "fs/promises";
 import { requireAuth, requireAdmin } from "../shared.js";
-import { ingestDocument, searchKnowledgeBase, translateChunks, listDocuments, deleteDocument, getDriver, SUPPORTED_EXTS } from "../kb.js";
+import { ingestDocument, searchKnowledgeBase, translateChunks, listDocuments, deleteDocument, getDriver, SUPPORTED_EXTS, KB_IMAGES_DIR } from "../kb.js";
+
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"]);
 
 export const router = express.Router();
 
@@ -74,15 +77,26 @@ router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBat
         catch (e) { _sseEmit(jobId, "file_error", { filename, error: `ZIP read failed: ${e.message}` }); continue; }
 
         const entries = Object.entries(zip.files).filter(([, e]) => !e.dir);
+
+        // Pre-collect all image files from ZIP into memory map (keyed by full ZIP path)
+        const zipImages = new Map();
+        for (const [zipPath, zipEntry] of entries) {
+          const ext = zipPath.toLowerCase().split(".").pop();
+          if (IMAGE_EXTS.has(ext)) {
+            zipImages.set(zipPath, await zipEntry.async("nodebuffer"));
+          }
+        }
+
         for (const [zipPath, zipEntry] of entries) {
           const innerExt = zipPath.toLowerCase().split(".").pop();
           if (!SUPPORTED_EXTS.includes(innerExt)) continue;
           const basename  = zipPath.split("/").pop();
+          const zipDir    = zipPath.split("/").slice(0, -1).join("/");
           const entryDate = zipEntry.date ? zipEntry.date.toISOString().slice(0, 10) : null;
           _sseEmit(jobId, "processing", { filename: basename });
           try {
             const buf = await zipEntry.async("nodebuffer");
-            const r   = await ingestDocument({ buffer: buf, filename: basename, uploadedBy: userId, documentDate: entryDate });
+            const r   = await ingestDocument({ buffer: buf, filename: basename, uploadedBy: userId, documentDate: entryDate, zipImages, zipDir });
             _sseEmit(jobId, "file_done", { filename: basename, chunkCount: r.chunkCount });
           } catch (e) {
             _sseEmit(jobId, "file_error", { filename: basename, error: e.message });
@@ -149,6 +163,7 @@ router.delete("/api/knowledge-base/reset", requireAuth, requireAdmin, async (_re
       await session.run("MATCH (e:KBEntity) WHERE NOT (()-[:MENTIONS]->(e)) DETACH DELETE e");
       await session.run("MATCH (d:KBDocument) DETACH DELETE d");
     } finally { await session.close(); }
+    await fs.rm(KB_IMAGES_DIR, { recursive: true, force: true }).catch(() => {});
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -161,14 +176,15 @@ router.post("/api/knowledge-base/search", requireAuth, express.json(), async (re
   try {
     const results    = await searchKnowledgeBase(query);
     const translated = await translateChunks(results, lang ?? "fr");
-    const chunks     = translated.map(c => c.text);
-    const chunkFiles = translated.map(c => c.filename ?? null);
-    const seen       = new Map();
+    const chunks      = translated.map(c => c.text);
+    const chunkFiles  = translated.map(c => c.filename ?? null);
+    const chunkImages = translated.map(c => c.images ?? []);
+    const seen        = new Map();
     for (const c of translated) {
       if (c.filename && !seen.has(c.filename)) seen.set(c.filename, c.documentDate ?? null);
     }
     const sources = [...seen.entries()].map(([filename, documentDate]) => ({ filename, documentDate }));
-    res.json({ chunks, chunkFiles, sources });
+    res.json({ chunks, chunkFiles, chunkImages, sources });
   } catch (e) {
     console.error("[KB] Search error:", e);
     res.json({ chunks: [] });

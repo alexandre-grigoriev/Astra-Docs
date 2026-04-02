@@ -3,6 +3,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   text: string;
   timestamp: string;
+  images?: string[];
 }
 
 export interface ChatSummary {
