@@ -17,7 +17,7 @@ router.get("/api/projects", requireAuth, (req, res) => {
   const result = projects.map((p) => ({
     ...p,
     chats: db.prepare(
-      "SELECT id, title, created_at FROM chats WHERE project_id = ? ORDER BY created_at"
+      "SELECT id, title, lang, created_at FROM chats WHERE project_id = ? ORDER BY created_at"
     ).all(p.id),
   }));
   res.json(result);
@@ -65,12 +65,15 @@ router.post("/api/projects/:projectId/chats", requireAuth, (req, res) => {
   res.json({ id, title, created_at: new Date().toISOString() });
 });
 
-/** Update chat title */
+/** Update chat title and/or lang */
 router.patch("/api/chats/:id", requireAuth, (req, res) => {
-  const { title } = req.body;
-  if (!title?.trim()) return res.status(400).json({ error: "Title required" });
-  db.prepare("UPDATE chats SET title = ? WHERE id = ?")
-    .run(title.trim(), req.params.id);
+  const { title, lang } = req.body;
+  if (title?.trim()) {
+    db.prepare("UPDATE chats SET title = ? WHERE id = ?").run(title.trim(), req.params.id);
+  }
+  if (lang) {
+    db.prepare("UPDATE chats SET lang = ? WHERE id = ?").run(lang, req.params.id);
+  }
   res.json({ ok: true });
 });
 

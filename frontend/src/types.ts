@@ -9,6 +9,7 @@ export interface ChatMessage {
 export interface ChatSummary {
   id: string;
   title: string;
+  lang: string;
   created_at: string;
 }
 

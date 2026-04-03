@@ -4,12 +4,3 @@ e:\Projects\Avatar\venv\Scripts\Activate.ps1
 # or CMD
 e:\Projects\Avatar\venv\Scripts\activate.bat
 
-
-```mermaid
-graph LR
-    User --> UI
-    UI --> API
-    API --> Retriever
-    Retriever --> VectorDB
-    API --> LLM
-    LLM --> Response

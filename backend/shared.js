@@ -51,6 +51,7 @@ for (const col of [
   "ALTER TABLE users ADD COLUMN verify_token  TEXT",
   "ALTER TABLE users ADD COLUMN verify_expires TEXT",
   "ALTER TABLE users ADD COLUMN status        TEXT NOT NULL DEFAULT 'approved'",
+  "ALTER TABLE chats ADD COLUMN lang TEXT NOT NULL DEFAULT 'fr'",
 ]) {
   try { db.exec(col); } catch { /* column already exists */ }
 }
@@ -72,6 +73,7 @@ db.exec(`
     id         TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     title      TEXT NOT NULL DEFAULT 'New chat',
+    lang       TEXT NOT NULL DEFAULT 'fr',
     created_at TEXT DEFAULT (datetime('now'))
   );
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, LogOut, CheckCircle2, Plus, Trash2, MessageSquare, FolderOpen } from "lucide-react";
+import { ChevronDown, LogOut, CheckCircle2, Plus, Trash2, MessageSquare, FolderOpen, Pencil } from "lucide-react";
 import "./App.css";
 import { LANGS } from "./constants";
 import { cn, UserStatusIcon } from "./utils";
@@ -35,6 +35,8 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [chatMessages, setChatMessages] = useState<Record<string, ChatMessage[]>>({});
   const [isThinking, setIsThinking] = useState(false);
   const [input, setInput] = useState("");
@@ -124,8 +126,33 @@ export default function App() {
     }
   }, [user]);
 
-  // Load messages when chat is activated
-  useEffect(() => { if (activeChatId) loadMessages(activeChatId); }, [activeChatId]);
+  // Load messages and restore language when chat is activated.
+  const langRestoredBySwitch = useRef(false);
+  const activeChatIdRef = useRef<string | null>(activeChatId);
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+    if (!activeChatId) return;
+    loadMessages(activeChatId);
+    const chat = projects.flatMap(p => p.chats).find(c => c.id === activeChatId);
+    if (chat?.lang) {
+      langRestoredBySwitch.current = true; // suppress save for this lang change
+      setLang(chat.lang);
+    }
+  }, [activeChatId]);
+
+  // Persist language to the active chat only when the user explicitly changes it
+  // (not when it was restored by switching chats).
+  const isFirstLangRender = useRef(true);
+  useEffect(() => {
+    if (isFirstLangRender.current) { isFirstLangRender.current = false; return; }
+    if (langRestoredBySwitch.current) { langRestoredBySwitch.current = false; return; }
+    if (!activeChatIdRef.current) return;
+    fetch(`/api/chats/${activeChatIdRef.current}`, {
+      method: "PATCH", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lang }),
+    }).catch(() => {});
+  }, [lang]);
 
   // Close user menu on outside click
   useEffect(() => {
@@ -142,7 +169,7 @@ export default function App() {
     function onMove(e: MouseEvent) {
       if (!isDragging.current || !mainGridRef.current) return;
       const rect = mainGridRef.current.getBoundingClientRect();
-      setSidebarWidth(Math.max(220, Math.min(400, e.clientX - rect.left)));
+      setSidebarWidth(Math.max(220, Math.min(600, e.clientX - rect.left)));
     }
     function onUp() {
       if (isDragging.current) {
@@ -204,6 +231,38 @@ export default function App() {
     } catch {}
   }
 
+  async function renameChat(projectId: string, chatId: string, title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    try {
+      await fetch(`/api/chats/${chatId}`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      setProjects((prev) => prev.map((p) =>
+        p.id === projectId ? { ...p, chats: p.chats.map((c) => c.id === chatId ? { ...c, title: trimmed } : c) } : p
+      ));
+    } catch {}
+    setRenamingChatId(null);
+  }
+
+  // F2 shortcut — start renaming the currently active chat
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "F2") return;
+      if (!activeChatId || renamingChatId) return;
+      // Don't intercept F2 while user is typing in an input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      const chat = projects.flatMap(p => p.chats).find(c => c.id === activeChatId);
+      if (chat) { setRenamingChatId(activeChatId); setRenameValue(chat.title); }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeChatId, renamingChatId, projects]);
+
   async function deleteChat(projectId: string, chatId: string) {
     try {
       await fetch(`/api/chats/${chatId}`, { method: "DELETE", credentials: "include" });
@@ -228,16 +287,23 @@ export default function App() {
 
     if (!projId) {
       try {
-        const res = await fetch("/api/projects", {
-          method: "POST", credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: "Default" }),
-        });
-        if (res.ok) {
-          const project = await res.json();
-          setProjects((prev) => [...prev, project]);
-          projId = project.id;
+        // Reuse existing "Default" project if one already exists
+        const existing = projects.find((p) => p.name === "Default");
+        if (existing) {
+          projId = existing.id;
           setActiveProjectId(projId);
+        } else {
+          const res = await fetch("/api/projects", {
+            method: "POST", credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "Default" }),
+          });
+          if (res.ok) {
+            const project = await res.json();
+            setProjects((prev) => [...prev, project]);
+            projId = project.id;
+            setActiveProjectId(projId);
+          }
         }
       } catch { return; }
     }
@@ -444,10 +510,29 @@ export default function App() {
                   <div
                     key={chat.id}
                     className={cn("chatRow", activeChatId === chat.id && "chatRowActive")}
-                    onClick={() => { setActiveProjectId(project.id); setActiveChatId(chat.id); }}
+                    onClick={() => { if (renamingChatId !== chat.id) { setActiveProjectId(project.id); setActiveChatId(chat.id); } }}
                   >
                     <MessageSquare className="h-5 w-5 flex-shrink-0" />
-                    <span className="chatRowTitle">{chat.title}</span>
+                    {renamingChatId === chat.id ? (
+                      <input
+                        className="chatRenameInput"
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") renameChat(project.id, chat.id, renameValue);
+                          if (e.key === "Escape") setRenamingChatId(null);
+                        }}
+                        onBlur={() => renameChat(project.id, chat.id, renameValue)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <span className="chatRowTitle">{chat.title}</span>
+                    )}
+                    <button className="sidebarIconBtn" title="Rename chat (F2)"
+                      onClick={(e) => { e.stopPropagation(); setRenamingChatId(chat.id); setRenameValue(chat.title); }}>
+                      <Pencil className="h-4 w-4" />
+                    </button>
                     <button className="sidebarIconBtn sidebarIconBtnDanger" title="Delete chat"
                       onClick={(e) => { e.stopPropagation(); deleteChat(project.id, chat.id); }}>
                       <Trash2 className="h-5 w-5" />
@@ -479,7 +564,7 @@ export default function App() {
         />
       </main>
 
-      <div className="footerNote">Astra Docs — HORIBA FRANCE 2026</div>
+      <div className="footerNote">Astra Docs — HORIBA FRANCE 2026 — Powered by AI</div>
 
       {addPdfOpen && <AddPdfDialog open={addPdfOpen} onClose={() => setAddPdfOpen(false)} />}
 

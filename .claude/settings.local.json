@@ -11,7 +11,8 @@
       "Bash(npm run:*)",
       "Bash(grep -v \"^TalkingHead$\")",
       "Bash(grep -n 'isPlaying ? \"\"/stop' e:/Projects/Avatar/frontend/src/App.tsx)",
-      "Bash(where gh:*)"
+      "Bash(where gh:*)",
+      "Bash(node --test tests/retrieval.test.js)"
     ]
   }
 }

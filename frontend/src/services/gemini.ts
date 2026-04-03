@@ -38,15 +38,22 @@ async function fetchKnowledgeBaseContext(
     const chunkFiles: (string | null)[] = Array.isArray(data.chunkFiles) ? data.chunkFiles : [];
     const chunkImages: string[][] = Array.isArray(data.chunkImages) ? data.chunkImages : [];
     const context = data.chunks.map((c: string, i: number) => {
-      const label = chunkFiles[i] ?? `source ${i + 1}`;
-      return `[${label}]\n${c}`;
+      const label = chunkFiles[i];
+      return label ? `[${label}]\n${c}` : c;
     }).join("\n---\n");
-    // Show images from the most-retrieved doc (highest chunk count = most relevant)
-    const fileCount = new Map<string, number>();
-    for (const f of chunkFiles) if (f) fileCount.set(f, (fileCount.get(f) ?? 0) + 1);
-    const primaryFile = [...fileCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-    const primaryIdx = chunkFiles.findIndex(f => f === primaryFile);
-    const images = (primaryIdx >= 0 ? chunkImages[primaryIdx] ?? [] : []) as string[];
+    // Collect images from the top 2 unique files in results (sorted by relevance).
+    // Using only top-2 files avoids pulling in images from lower-ranked documents
+    // (e.g. Examples.md sandbox screenshots) while still showing images from both
+    // the primary and secondary relevant documents (e.g. Concept.md + Design.md).
+    const seenFiles = new Set<string>();
+    const topFiles: string[] = [];
+    for (const f of chunkFiles) {
+      if (f && !seenFiles.has(f)) { seenFiles.add(f); topFiles.push(f); }
+      if (topFiles.length === 2) break;
+    }
+    const images = [
+      ...new Set(chunkFiles.flatMap((f, i) => topFiles.includes(f ?? "") ? (chunkImages[i] ?? []) : []))
+    ] as string[];
     return { context, sources, images };
   } catch {
     return { context: "", sources: [], images: [] };
@@ -65,11 +72,8 @@ export async function sendToGemini(
   if (kbContext) {
     system += `\nKnowledge base context (use this as primary source):\n${kbContext}\n`;
     if (kbSources.length) {
-      const srcList = kbSources
-        .map((s, i) => `[${i + 1}] "${s.filename}"${s.documentDate ? ` (${s.documentDate})` : ""}`)
-        .join(", ");
-      system += `Source documents: ${srcList}\n`;
-      system += "When referencing the knowledge base, cite the source document by name. ";
+      system += "Each context passage is labeled with its source filename in brackets, e.g. [Block.md]. ";
+      system += "When citing information, reference the document by its filename exactly as it appears in the label, e.g. \"as described in Block.md\" or \"(Block.md)\". Do not use numbered citations like [1] or [2]. ";
     }
     if (images.length) {
       system += `The relevant diagrams and images from the knowledge base are displayed automatically to the user. Do not say there are no images. `;

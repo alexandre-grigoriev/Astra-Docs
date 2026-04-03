@@ -1,19 +1,33 @@
 /**
- * routes/knowledgeBase.js — Graph RAG knowledge base endpoints
+ * routes/knowledgeBase.js — Knowledge base REST endpoints
+ *
+ * Wired directly to the new module structure:
+ *   ingestion/pipeline.js  — ingestDocument
+ *   retrieval/query_pipeline.js — searchKnowledgeBase, translateChunks
+ *   graph/driver.js        — cypher (reset)
+ *   graph/queries/document.js — listDocuments, deleteDocument
+ *   ingestion/image_resolver.js — KB_IMAGES_DIR
+ *   utils/config.js        — SUPPORTED_EXTS, IMAGE_EXTS
+ *   utils/logger.js        — logger
  */
+
 import express from "express";
 import multer from "multer";
 import JSZip from "jszip";
 import crypto from "crypto";
 import fs from "fs/promises";
 import { requireAuth, requireAdmin } from "../shared.js";
-import { ingestDocument, searchKnowledgeBase, translateChunks, listDocuments, deleteDocument, getDriver, SUPPORTED_EXTS, KB_IMAGES_DIR } from "../kb.js";
-
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"]);
+import { ingestDocument } from "../ingestion/pipeline.js";
+import { searchKnowledgeBase, translateChunks } from "../retrieval/query_pipeline.js";
+import { listDocuments, deleteDocument } from "../graph/queries/document.js";
+import { cypher } from "../graph/driver.js";
+import { KB_IMAGES_DIR } from "../ingestion/image_resolver.js";
+import { SUPPORTED_EXTS, IMAGE_EXTS } from "../utils/config.js";
+import { logger } from "../utils/logger.js";
 
 export const router = express.Router();
 
-const kbUpload      = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50  * 1024 * 1024 } });
+const kbUpload      = multer({ storage: multer.memoryStorage(), limits: { fileSize:  50 * 1024 * 1024 } });
 const kbBatchUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
 // ── SSE job store ──────────────────────────────────────────────────────────────
@@ -35,7 +49,6 @@ function _sseFinish(jobId) {
   const msg = `event: done\ndata: {}\n\n`;
   if (job.res) { job.res.write(msg); job.res.end(); }
   else         job.queue.push(msg);
-  // Keep entry briefly so the client can still connect and drain
   setTimeout(() => _jobs.delete(jobId), 30_000);
 }
 
@@ -50,12 +63,12 @@ router.post("/api/knowledge-base/upload", requireAuth, requireAdmin, kbUpload.an
     const result = await ingestDocument({ buffer: file.buffer, filename, uploadedBy: req.session.user.id, documentDate });
     res.json({ ok: true, ...result });
   } catch (e) {
-    console.error("[KB] Ingest error:", e);
+    logger.error("KB", "Single upload error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── Batch upload — starts job, returns jobId immediately ──────────────────────
+// ── Batch upload — starts SSE job, returns jobId immediately ──────────────────
 
 router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBatchUpload.array("files", 100), (req, res) => {
   if (!req.files?.length) return res.status(400).json({ error: "No files provided" });
@@ -65,7 +78,6 @@ router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBat
   _jobs.set(jobId, { res: null, queue: [], done: false });
   res.json({ jobId });
 
-  // Process in background
   (async () => {
     for (const f of req.files) {
       const filename = Buffer.from(f.originalname, "latin1").toString("utf8");
@@ -78,11 +90,11 @@ router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBat
 
         const entries = Object.entries(zip.files).filter(([, e]) => !e.dir);
 
-        // Pre-collect all image files from ZIP into memory map (keyed by full ZIP path)
+        // Pre-collect all image files from ZIP
         const zipImages = new Map();
         for (const [zipPath, zipEntry] of entries) {
-          const ext = zipPath.toLowerCase().split(".").pop();
-          if (IMAGE_EXTS.has(ext)) {
+          const imgExt = zipPath.toLowerCase().split(".").pop();
+          if (IMAGE_EXTS.has(imgExt)) {
             zipImages.set(zipPath, await zipEntry.async("nodebuffer"));
           }
         }
@@ -102,6 +114,7 @@ router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBat
             _sseEmit(jobId, "file_error", { filename: basename, error: e.message });
           }
         }
+
       } else if (SUPPORTED_EXTS.includes(ext)) {
         _sseEmit(jobId, "processing", { filename });
         try {
@@ -130,7 +143,6 @@ router.get("/api/knowledge-base/batch-progress/:jobId", requireAuth, requireAdmi
   res.flushHeaders();
 
   job.res = res;
-  // Drain any messages emitted before client connected
   for (const msg of job.queue) res.write(msg);
   job.queue = [];
 
@@ -157,15 +169,12 @@ router.delete("/api/knowledge-base/documents/:id", requireAuth, requireAdmin, as
 
 router.delete("/api/knowledge-base/reset", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const session = getDriver().session();
-    try {
-      await session.run("MATCH (n:KBDocument)-[:HAS_CHUNK]->(c:KBChunk) DETACH DELETE c");
-      await session.run("MATCH (e:KBEntity) WHERE NOT (()-[:MENTIONS]->(e)) DETACH DELETE e");
-      await session.run("MATCH (d:KBDocument) DETACH DELETE d");
-    } finally { await session.close(); }
+    await cypher("MATCH (n) WHERE n:KBChunk OR n:KBEntity OR n:KBDocument DETACH DELETE n");
     await fs.rm(KB_IMAGES_DIR, { recursive: true, force: true }).catch(() => {});
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Search ─────────────────────────────────────────────────────────────────────
@@ -174,8 +183,9 @@ router.post("/api/knowledge-base/search", requireAuth, express.json(), async (re
   const { query, lang } = req.body;
   if (!query) return res.status(400).json({ error: "query required" });
   try {
-    const results    = await searchKnowledgeBase(query);
-    const translated = await translateChunks(results, lang ?? "fr");
+    const results     = await searchKnowledgeBase(query);
+    logger.info('KB search', { query, chunksFound: results.length });
+    const translated  = await translateChunks(results, lang ?? "fr");
     const chunks      = translated.map(c => c.text);
     const chunkFiles  = translated.map(c => c.filename ?? null);
     const chunkImages = translated.map(c => c.images ?? []);
@@ -186,7 +196,7 @@ router.post("/api/knowledge-base/search", requireAuth, express.json(), async (re
     const sources = [...seen.entries()].map(([filename, documentDate]) => ({ filename, documentDate }));
     res.json({ chunks, chunkFiles, chunkImages, sources });
   } catch (e) {
-    console.error("[KB] Search error:", e);
+    logger.error("KB", "Search error:", e.message);
     res.json({ chunks: [] });
   }
 });

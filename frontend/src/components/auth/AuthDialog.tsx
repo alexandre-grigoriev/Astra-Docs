@@ -26,7 +26,7 @@ export function AuthDialog({ open, onBeginOAuth, onSuccess, onClose }: {
   onSuccess: () => void;
   onClose?: () => void;
 }) {
-  const [screen, setScreen]     = useState<AuthScreen>("signin");
+  const [screen, setScreen]     = useState<AuthScreen>("ldap");
   const [email, setEmail]       = useState("");
   const [nickname, setNickname] = useState("");
   const [password, setPassword] = useState("");
@@ -39,7 +39,7 @@ export function AuthDialog({ open, onBeginOAuth, onSuccess, onClose }: {
   const [ldapUser, setLdapUser] = useState("");
 
   useEffect(() => {
-    if (open) { setScreen("signin"); setEmail(""); setNickname(""); setPassword(""); setConfirm(""); setError(""); setUnverifiedEmail(""); setResent(false); setLinked(false); setLdapUser(""); }
+    if (open) { setScreen("ldap"); setEmail(""); setNickname(""); setPassword(""); setConfirm(""); setError(""); setUnverifiedEmail(""); setResent(false); setLinked(false); setLdapUser(""); }
   }, [open]);
 
   async function handleSignIn(e: React.FormEvent) {
@@ -158,7 +158,7 @@ export function AuthDialog({ open, onBeginOAuth, onSuccess, onClose }: {
                   <div className="authField"><div className="authLabel">Password</div><PasswordInput value={password} onChange={setPassword} placeholder="Windows password" /></div>
                   {error && <div className="authError">{error}</div>}
                   <button className="authContinue" type="submit" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
-                  <div className="authFooter"><button type="button" className="authLink" onClick={() => { setScreen("signin"); setError(""); }}>Back</button></div>
+                  <div className="authFooter"><button type="button" className="authLink" onClick={() => { setScreen("signin"); setError(""); }}>Other sign-in options</button></div>
                 </form>
               )}
 
