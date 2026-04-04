@@ -1,20 +1,77 @@
-# TEST.md — Retrieval Pipeline Integration Tests
+# TEST.md — Test Suites
 
-## Overview
+All test files live in `tests/` at the repo root and are run with the Node.js
+built-in test runner — no extra packages required.
 
-Integration tests for the GraphRAG retrieval pipeline.
-Tests call `searchKnowledgeBase()` directly against a live Neo4j instance — no mocking.
+> `tests/` is git-ignored. Run tests from the **repo root**.
 
-**Test file:** `backend/tests/retrieval.test.js`  
-**Runner:** Node.js built-in `node:test` (Node 18+, no extra packages)  
-**Run command:**
+---
+
+## Suite 1 — Graphviz Renderer (unit)
+
+**File:** `tests/graphviz_renderer.test.js`  
+**Run:** `node --test tests/graphviz_renderer.test.js`  
+**Prerequisites:** none (pure WASM, no Neo4j, no `.env`)
+
+Tests `backend/ingestion/graphviz_renderer.js` — the module that renders
+`` ```graphviz `` fenced blocks in Markdown files to SVG during ingestion.
+
+### Test 1 — dotToSvg: valid SVG output
+Renders `digraph { A -> B }` and asserts the result is a string containing `<svg` and `</svg>`.
+
+### Test 2 — dotToSvg: node labels preserved
+Asserts that node labels (`Alpha`, `Beta`) appear verbatim in the SVG output.
+
+### Test 3 — dotToSvg: rejects invalid DOT
+Asserts that malformed DOT source causes a rejection (error thrown).
+
+### Test 4 — renderGraphvizBlocks: processes Acquisition.md fixture
+Reads `test_data_docs/andor-docs/Acquisition.md` (contains one `` ```graphviz `` block)
+and asserts `generatedImages.size >= 1` and no `` ```graphviz `` fence remains in the output.
+
+### Test 5 — renderGraphvizBlocks: Acquisition.md SVG is valid
+Asserts the rendered buffer starts with valid SVG markup and contains the label
+`Acquisition` from the DOT source's `Title` node.
+
+### Test 6 — renderGraphvizBlocks: IMAGE_REF token injected
+Asserts the output Markdown contains `[IMAGE_REF:graphviz-<hash>.svg]` in place
+of the original fenced block.
+
+### Test 7 — renderGraphvizBlocks: deterministic filenames
+Runs `renderGraphvizBlocks` twice on the same input and asserts both `Map` keys are identical.
+Guarantees idempotent ingestion (same DOT → same filename → `MERGE` in Neo4j is safe).
+
+### Test 8 — disk output: SVG written to tests/output/
+Writes all rendered SVGs to `tests/output/` and asserts each file exists and is non-empty.
+**Inspect the result:** open `tests/output/graphviz-f4f541340df1.svg` in a browser or VS Code.
+
+### Test 9 — no-op on plain Markdown
+Asserts that Markdown with no `` ```graphviz `` blocks is returned unchanged and
+`generatedImages` is empty.
+
+### Last run
 ```
-cd backend
-npm test
-# or directly:
-node --test tests/retrieval.test.js
-```
+TAP version 13
+ok 1 - dotToSvg renders a minimal digraph to valid SVG
+ok 2 - dotToSvg output contains expected node labels
+ok 3 - dotToSvg rejects invalid DOT source
+ok 4 - renderGraphvizBlocks processes Acquisition.md fixture
+ok 5 - Acquisition.md graphviz block renders to a valid SVG buffer
+ok 6 - IMAGE_REF token is injected in place of the graphviz block
+ok 7 - rendering is deterministic — same DOT source produces same filename
+ok 8 - Acquisition.md graphviz block is written to tests/output/
+ok 9 - renderGraphvizBlocks is a no-op on markdown with no graphviz blocks
 
+# tests 9  pass 9  fail 0  duration_ms ~275
+```
+Date: 2026-04-04
+
+---
+
+## Suite 2 — Retrieval Pipeline (integration)
+
+**File:** `tests/retrieval.test.js`  
+**Run:** `node --test tests/retrieval.test.js`  
 **Prerequisites:**
 - Neo4j running on `bolt://localhost:7687`
 - `astra-model.zip` ingested (Batch processing tab)

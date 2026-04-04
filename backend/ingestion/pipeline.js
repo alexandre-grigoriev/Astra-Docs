@@ -86,7 +86,13 @@ export async function ingestDocument({ buffer, filename, uploadedBy, documentDat
     throw error;
   }
 
-  const { text, mimeType } = extraction;
+  const { text, mimeType, generatedImages } = extraction;
+
+  // Merge SVGs rendered from graphviz blocks into the image map
+  if (generatedImages instanceof Map) {
+    for (const [key, buf] of generatedImages) imageMap.set(key, buf);
+  }
+
   if (!text?.trim()) {
     const err = new Error(`No text extracted from ${filename}`);
     logger.error('Empty extraction result', { docId, filename });

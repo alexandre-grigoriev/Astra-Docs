@@ -35,10 +35,13 @@ export function chunkText(text) {
     const slice = words.slice(pos, pos + WINDOW_SIZE);
     const wordCount = slice.length;
 
-    if (wordCount >= MIN_WORDS) {
+    const chunkText = slice.join(' ');
+    // Keep chunks that meet the word minimum OR contain at least one IMAGE_REF
+    // (a diagram-only file would otherwise produce zero chunks and lose its images)
+    if (wordCount >= MIN_WORDS || chunkText.includes('[IMAGE_REF:')) {
       chunks.push({
         index: chunks.length,
-        text: slice.join(' '),
+        text: chunkText,
         wordCount,
       });
     }
