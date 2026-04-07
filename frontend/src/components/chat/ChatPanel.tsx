@@ -26,15 +26,26 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const speech = useSpeechRecognition(lang);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const ZOOM_STEP = 0.4;
+  const ZOOM_MAX  = 6;
+  const ZOOM_MIN  = 0.5;
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, isThinking]);
 
-  // Close lightbox on Escape
+  // Reset zoom when lightbox opens/closes
+  useEffect(() => { setZoom(1); }, [lightboxUrl]);
+
+  // Close on Escape; +/- keys to zoom
   useEffect(() => {
     if (!lightboxUrl) return;
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setLightboxUrl(null); }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { setLightboxUrl(null); return; }
+      if (e.key === "+" || e.key === "=") setZoom(z => Math.min(z + ZOOM_STEP, ZOOM_MAX));
+      if (e.key === "-")                  setZoom(z => Math.max(z - ZOOM_STEP, ZOOM_MIN));
+    }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [lightboxUrl]);
@@ -135,9 +146,22 @@ export function ChatPanel({
       {lightboxUrl && (() => {
         const title = lightboxUrl.split("/").pop()?.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ") ?? "";
         return (
-          <div className="imgLightbox" onClick={() => setLightboxUrl(null)}>
+          <div
+            className="imgLightbox"
+            onClick={() => setLightboxUrl(null)}
+            onWheel={(e) => {
+              e.preventDefault();
+              setZoom(z => Math.min(Math.max(z - e.deltaY * 0.001, ZOOM_MIN), ZOOM_MAX));
+            }}
+          >
             <figure className="imgLightboxFigure" onClick={(e) => e.stopPropagation()}>
-              <img src={lightboxUrl} alt={title} className="imgLightboxImg" />
+              <img
+                src={lightboxUrl}
+                alt={title}
+                className="imgLightboxImg"
+                style={{ transform: `scale(${zoom})`, transformOrigin: "center center", cursor: zoom < ZOOM_MAX ? "zoom-in" : "zoom-out" }}
+                onClick={() => setZoom(z => z < ZOOM_MAX ? Math.min(z + ZOOM_STEP, ZOOM_MAX) : 1)}
+              />
               {title && <figcaption className="imgLightboxCaption">{title}</figcaption>}
             </figure>
           </div>

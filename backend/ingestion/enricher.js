@@ -14,6 +14,32 @@ import { callGemini, callGeminiJson } from './embedder.js';
 import { logger } from '../utils/logger.js';
 
 /**
+ * Best-effort repair of a truncated JSON string from Gemini.
+ * If Gemini hits maxOutputTokens mid-JSON, the response is cut off.
+ * Strategy: close any open arrays/objects so JSON.parse has a chance.
+ *
+ * @param {string} raw
+ * @returns {string}
+ */
+function repairTruncatedJson(raw) {
+  const s = raw.trim();
+  // Track open brackets to close them
+  const stack = [];
+  let inString = false;
+  let escape   = false;
+  for (const ch of s) {
+    if (escape)          { escape = false; continue; }
+    if (ch === '\\')     { escape = true;  continue; }
+    if (ch === '"')      { inString = !inString; continue; }
+    if (inString)        continue;
+    if (ch === '{' || ch === '[') stack.push(ch === '{' ? '}' : ']');
+    if (ch === '}' || ch === ']') stack.pop();
+  }
+  // Close any unclosed structures
+  return s + stack.reverse().join('');
+}
+
+/**
  * @typedef {object} Entity
  * @property {string} key         - canonical snake_case identifier, e.g. "raman_spectrometer"
  * @property {string} type        - DEVICE|CONCEPT|PROCESS|PERSON|LOCATION|ORGANIZATION|OTHER
@@ -48,7 +74,9 @@ Always respond with valid JSON matching the schema exactly.`;
 export async function generateDocumentSummary(text) {
   const sample = text.slice(0, 3000);
   const prompt = `Summarize the following technical documentation in 2–3 sentences.
-Focus on the main topic, key concepts, and intended audience.
+Focus on the main topic, key concepts, and purpose.
+Use the file path (if provided) as additional context to understand what the document is about.
+If the content is a diagram (DOT/Graphviz source), describe what the diagram represents.
 Output only the summary, no preamble.
 
 DOCUMENT:
@@ -104,8 +132,8 @@ Respond ONLY with this JSON structure:
 }`;
 
   try {
-    const raw = await callGeminiJson(SYSTEM_INSTRUCTION, prompt, { maxTokens: 2000 });
-    const parsed = JSON.parse(raw);
+    const raw = await callGeminiJson(SYSTEM_INSTRUCTION, prompt, { maxTokens: 4000 });
+    const parsed = JSON.parse(repairTruncatedJson(raw));
 
     // Validate required fields; fall back gracefully on malformed response
     if (typeof parsed.enrichedText !== 'string') {

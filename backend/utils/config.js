@@ -59,6 +59,10 @@ export const config = {
   LDAP_BIND_DN:       process.env.LDAP_BIND_DN       || '',
   LDAP_BIND_PASSWORD: process.env.LDAP_BIND_PASSWORD || '',
 
+  // SVG display constraints (used when rendering graphviz blocks to SVG files)
+  SVG_MAX_WIDTH:  parseInt(process.env.SVG_MAX_WIDTH  || '800', 10),
+  SVG_MAX_HEIGHT: parseInt(process.env.SVG_MAX_HEIGHT || '600', 10),
+
   // Uploads
   UPLOADS_DIR: process.env.UPLOADS_DIR || '',
 

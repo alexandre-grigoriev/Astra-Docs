@@ -15,17 +15,34 @@ import express from "express";
 import multer from "multer";
 import JSZip from "jszip";
 import crypto from "crypto";
+import path from "path";
 import fs from "fs/promises";
 import { requireAuth, requireAdmin } from "../shared.js";
 import { ingestDocument } from "../ingestion/pipeline.js";
 import { searchKnowledgeBase, translateChunks } from "../retrieval/query_pipeline.js";
-import { listDocuments, deleteDocument } from "../graph/queries/document.js";
+import { listDocuments, deleteDocument, findDocumentIdsByFilepath, getDocumentImagesByFilename } from "../graph/queries/document.js";
 import { cypher } from "../graph/driver.js";
 import { KB_IMAGES_DIR } from "../ingestion/image_resolver.js";
 import { SUPPORTED_EXTS, IMAGE_EXTS } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
 
 export const router = express.Router();
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+/**
+ * Deletes all KBDocument nodes (and their chunks + disk images) that have the
+ * given filepath.  Called before batch re-ingest to prevent stale duplicates.
+ *
+ * @param {string} filepath
+ */
+async function purgeByFilepath(filepath) {
+  const ids = await findDocumentIdsByFilepath(filepath);
+  for (const id of ids) {
+    await deleteDocument(id);
+    await fs.rm(path.join(KB_IMAGES_DIR, id), { recursive: true, force: true }).catch(() => {});
+  }
+}
 
 const kbUpload      = multer({ storage: multer.memoryStorage(), limits: { fileSize:  50 * 1024 * 1024 } });
 const kbBatchUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
@@ -107,8 +124,9 @@ router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBat
           const entryDate = zipEntry.date ? zipEntry.date.toISOString().slice(0, 10) : null;
           _sseEmit(jobId, "processing", { filename: basename });
           try {
+            await purgeByFilepath(zipPath);
             const buf = await zipEntry.async("nodebuffer");
-            const r   = await ingestDocument({ buffer: buf, filename: basename, uploadedBy: userId, documentDate: entryDate, zipImages, zipDir });
+            const r   = await ingestDocument({ buffer: buf, filename: basename, uploadedBy: userId, documentDate: entryDate, zipImages, zipDir, filepath: zipPath });
             _sseEmit(jobId, "file_done", { filename: basename, chunkCount: r.chunkCount });
           } catch (e) {
             _sseEmit(jobId, "file_error", { filename: basename, error: e.message });
@@ -118,6 +136,7 @@ router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBat
       } else if (SUPPORTED_EXTS.includes(ext)) {
         _sseEmit(jobId, "processing", { filename });
         try {
+          await purgeByFilepath(filename);
           const r = await ingestDocument({ buffer: f.buffer, filename, uploadedBy: userId, documentDate: null });
           _sseEmit(jobId, "file_done", { filename, chunkCount: r.chunkCount });
         } catch (e) {
@@ -163,6 +182,57 @@ router.get("/api/knowledge-base/documents", requireAuth, async (_req, res) => {
 router.delete("/api/knowledge-base/documents/:id", requireAuth, requireAdmin, async (req, res) => {
   try { await deleteDocument(req.params.id); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Document images ────────────────────────────────────────────────────────────
+
+router.get("/api/knowledge-base/documents/:id/images", requireAuth, async (req, res) => {
+  try {
+    const docs = await listDocuments();
+    const doc  = docs.find(d => d.id === req.params.id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+    const images = await getDocumentImagesByFilename(doc.filename);
+    res.json({ images });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Update document (replace with new version) ─────────────────────────────────
+// Deletes the existing doc+chunks then re-ingests the new file under the same filepath.
+
+router.post("/api/knowledge-base/documents/:id/update", requireAuth, requireAdmin, kbUpload.any(), async (req, res) => {
+  const file = req.files?.[0];
+  if (!file) return res.status(400).json({ error: "File required" });
+
+  try {
+    // Look up the existing doc so we can preserve its filepath
+    const docs      = await listDocuments();
+    const existing  = docs.find(d => d.id === req.params.id);
+    if (!existing) return res.status(404).json({ error: "Document not found" });
+
+    const filename     = Buffer.from(file.originalname, "latin1").toString("utf8");
+    const documentDate = req.body.documentDate?.trim() || null;
+
+    // Delete existing graph nodes + images
+    await deleteDocument(req.params.id);
+    await fs.rm(`${KB_IMAGES_DIR}/${req.params.id}`, { recursive: true, force: true }).catch(() => {});
+
+    // Re-ingest, preserving the original filepath so it stays in the same folder in the tree
+    const result = await ingestDocument({
+      buffer: file.buffer,
+      filename,
+      uploadedBy: req.session.user.id,
+      documentDate,
+      filepath: existing.filepath,
+    });
+
+    logger.info("KB document updated", { oldId: req.params.id, newId: result.docId, filename });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    logger.error("KB document update error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Reset knowledge base ───────────────────────────────────────────────────────

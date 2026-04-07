@@ -6,7 +6,6 @@
 
 import path   from 'path';
 import fs     from 'fs';
-import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { logger }  from '../utils/logger.js';
 
@@ -61,21 +60,10 @@ export async function resolveChunkImages(chunk, docId, mdFilePath, imageMap) {
     const relPath = resolvedZipPath; // e.g. "folder/sub/image.png"
     const savePath = path.join(KB_IMAGES_DIR, docId, relPath.replace(/\//g, path.sep));
 
-    // Create parent dirs
+    // Create parent dirs and write — always overwrite.
+    // Path is scoped to docId (UUID) so there is no risk of cross-document collision.
     fs.mkdirSync(path.dirname(savePath), { recursive: true });
-
-    // Never overwrite an existing file with different content
-    if (fs.existsSync(savePath)) {
-      const existing = fs.readFileSync(savePath);
-      const existingHash = crypto.createHash('sha256').update(existing).digest('hex');
-      const newHash      = crypto.createHash('sha256').update(buf).digest('hex');
-      if (existingHash !== newHash) {
-        logger.warn('Image hash mismatch — keeping existing file', { savePath });
-      }
-      // Either identical or conflict: keep existing, still return the URL
-    } else {
-      fs.writeFileSync(savePath, buf);
-    }
+    fs.writeFileSync(savePath, buf);
 
     images.push(`/uploads/kb-images/${docId}/${relPath}`);
   }

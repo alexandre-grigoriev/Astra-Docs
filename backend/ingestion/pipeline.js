@@ -38,6 +38,40 @@ import { logger }         from '../utils/logger.js';
 const FRENCH_WORDS = ['le','la','les','de','du','des','un','une','et','est','en','pour','dans','que','qui'];
 
 /**
+ * Builds the text input for generateDocumentSummary.
+ *
+ * For plain documents, returns the first 3000 chars of text.
+ * For diagram-only documents (text is just IMAGE_REF tokens), falls back to the
+ * DOT source content so Gemini can summarise the diagram rather than hallucinate.
+ * The file path is always injected as a context header so the LLM can use the
+ * folder name and filename to understand what the document is about.
+ *
+ * @param {string} text            - extracted text (may contain only IMAGE_REF tokens)
+ * @param {string} dotContent      - raw DOT source from graphviz blocks (may be '')
+ * @param {string} filepath        - full relative path inside ZIP (e.g. "andor-docs/Acquisition.md")
+ * @returns {string}
+ */
+function buildSummaryInput(text, dotContent, filepath) {
+  const header = filepath ? `File: ${filepath}\n\n` : '';
+
+  // Strip IMAGE_REF tokens to get clean prose text
+  const cleanText = text.replace(/\[IMAGE_REF:[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
+
+  if (cleanText.length >= 50) {
+    // Enough prose — use it, prefixed with filepath context
+    return (header + cleanText).slice(0, 3000);
+  }
+
+  // Diagram-only file — use DOT source so the LLM can describe the diagram
+  if (dotContent) {
+    return `${header}This file contains a diagram. Below is the diagram source (DOT/Graphviz):\n\n${dotContent.slice(0, 2800)}`;
+  }
+
+  // Fallback: just filepath
+  return header || '(no content)';
+}
+
+/**
  * Detects document language from the first 500 characters.
  * Per RAG_PIPELINE.md A.2.
  *
@@ -68,14 +102,17 @@ function detectLanguage(text) {
  * @param {string|null}           [opts.documentDate]  - ISO date from ZIP metadata
  * @param {Map<string, Buffer>}   [opts.zipImages]     - image map for ZIP uploads
  * @param {string}                [opts.zipDir]        - directory of the file inside the ZIP
+ * @param {string}                [opts.filepath]      - full relative path inside ZIP (e.g. "Block/Concept.md"); equals filename for single-file uploads
  * @param {function}              [opts.onProgress]    - optional progress callback
  * @returns {Promise<{ docId: string, filename: string, lang: string, chunkCount: number, entitiesWritten: number, summary: string }>}
  */
-export async function ingestDocument({ buffer, filename, uploadedBy, documentDate = null, zipImages, zipDir, onProgress }) {
+export async function ingestDocument({ buffer, filename, uploadedBy, documentDate = null, zipImages, zipDir, filepath, onProgress }) {
   const docId    = crypto.randomUUID();
   const imageMap = zipImages instanceof Map ? zipImages : new Map();
   // mdFilePath is used by image_resolver to resolve IMAGE_REF paths relative to the .md file
   const mdFilePath = zipDir ? `${zipDir}/${filename}` : filename;
+  // filepath: full relative path inside ZIP, or just the filename for single-file uploads
+  const resolvedFilepath = filepath ?? mdFilePath;
 
   // ── Step 1: Text extraction ────────────────────────────────────────────────
   let extraction;
@@ -86,11 +123,18 @@ export async function ingestDocument({ buffer, filename, uploadedBy, documentDat
     throw error;
   }
 
-  const { text, mimeType, generatedImages } = extraction;
+  const { text, mimeType, generatedImages, dotContent } = extraction;
 
-  // Merge SVGs rendered from graphviz blocks into the image map
+  // Merge SVGs rendered from graphviz blocks into the image map.
+  // Keys must be prefixed with the .md file's directory so image_resolver finds
+  // them when it resolves IMAGE_REF tokens relative to that directory.
+  // e.g. mdFilePath = "andor-docs/Acquisition.md" → dir = "andor-docs"
+  //      key "graphviz-xxx.svg" → stored as "andor-docs/graphviz-xxx.svg"
   if (generatedImages instanceof Map) {
-    for (const [key, buf] of generatedImages) imageMap.set(key, buf);
+    const mdDir = mdFilePath.includes('/') ? mdFilePath.split('/').slice(0, -1).join('/') : '';
+    for (const [key, buf] of generatedImages) {
+      imageMap.set(mdDir ? `${mdDir}/${key}` : key, buf);
+    }
   }
 
   if (!text?.trim()) {
@@ -104,9 +148,13 @@ export async function ingestDocument({ buffer, filename, uploadedBy, documentDat
   const wordCount = text.split(/\s+/).filter(Boolean).length;
 
   // ── Step 3: Document summary ───────────────────────────────────────────────
+  // Build summary input: prefer actual document text; fall back to DOT source
+  // content when the file is diagram-only (text would be just IMAGE_REF tokens).
+  // Always inject the filepath so the LLM can use folder/filename as context.
+  const textForSummary = buildSummaryInput(text, dotContent, resolvedFilepath);
   let summary = '';
   try {
-    summary = await generateDocumentSummary(text);
+    summary = await generateDocumentSummary(textForSummary);
   } catch (error) {
     // Non-fatal — proceed with empty summary
     logger.warn('Document summary failed, continuing with empty string', { docId, filename, error: error.message });
@@ -119,6 +167,7 @@ export async function ingestDocument({ buffer, filename, uploadedBy, documentDat
   await upsertDocument({
     docId,
     filename,
+    filepath: resolvedFilepath,
     mimeType,
     language,
     summary,

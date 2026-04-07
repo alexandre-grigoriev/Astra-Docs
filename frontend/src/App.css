@@ -148,10 +148,10 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter,
 .msgImageCaption { font-size: 0.875rem; color: #6b7280; text-align: center; font-style: italic; font-weight: 600; }
 
 /* ===== Image lightbox ===== */
-.imgLightbox { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); cursor: zoom-out; }
+.imgLightbox { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.80); cursor: zoom-out; overflow: hidden; }
 .imgLightboxFigure { display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: default; }
-.imgLightboxImg { max-width: 90vw; max-height: 85vh; border-radius: 10px; box-shadow: 0 8px 48px rgba(0,0,0,0.6); object-fit: contain; }
-.imgLightboxCaption { color: rgba(255,255,255,0.85); font-size: 1.05rem; font-style: italic; text-align: center; font-weight: 600; }
+.imgLightboxImg { max-width: 90vw; max-height: 85vh; border-radius: 10px; box-shadow: 0 8px 48px rgba(0,0,0,0.6); object-fit: contain; transition: transform 0.15s ease; user-select: none; }
+.imgLightboxCaption { color: rgba(255,255,255,0.85); font-size: 1.05rem; font-style: italic; text-align: center; font-weight: 600; pointer-events: none; }
 
 /* ===== Thinking indicator ===== */
 .msgBubbleThinking { display: flex; align-items: center; gap: 5px; padding: 10px 14px; }

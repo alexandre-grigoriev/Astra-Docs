@@ -88,18 +88,21 @@ router.delete("/api/chats/:id", requireAuth, (req, res) => {
 /** Get all messages for a chat */
 router.get("/api/chats/:id/messages", requireAuth, (req, res) => {
   const messages = db.prepare(
-    "SELECT id, role, text, timestamp FROM messages WHERE chat_id = ? ORDER BY timestamp"
+    "SELECT id, role, text, timestamp, images FROM messages WHERE chat_id = ? ORDER BY timestamp"
   ).all(req.params.id);
-  res.json(messages);
+  res.json(messages.map(m => ({
+    ...m,
+    images: JSON.parse(m.images || "[]"),
+  })));
 });
 
 /** Append a message to a chat */
 router.post("/api/chats/:id/messages", requireAuth, (req, res) => {
-  const { id, role, text, timestamp } = req.body;
+  const { id, role, text, timestamp, images } = req.body;
   if (!role || !text) return res.status(400).json({ error: "role and text required" });
   const msgId = id || makeId();
   db.prepare(
-    "INSERT INTO messages (id, chat_id, role, text, timestamp) VALUES (?, ?, ?, ?, ?)"
-  ).run(msgId, req.params.id, role, text, timestamp || new Date().toISOString());
+    "INSERT INTO messages (id, chat_id, role, text, timestamp, images) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(msgId, req.params.id, role, text, timestamp || new Date().toISOString(), JSON.stringify(images ?? []));
   res.json({ ok: true, id: msgId });
 });

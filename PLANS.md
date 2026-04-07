@@ -64,6 +64,7 @@ Two-panel layout separated by a resizable splitter (default ratio **1:3**, left:
 
 - Markdown-rendered assistant responses
 - Images from retrieved KB chunks displayed below the assistant response bubble
+- **Image lightbox** — click any image to open full-screen; scroll wheel or click to zoom in (up to 6×); +/- keys also zoom; Escape or click outside to close
 - Full multi-turn history per chat (context-aware)
 - Voice input (Web Speech API)
 - Language selector (EN / FR / AR / JA / ZH / RU) — persisted per chat in SQLite; restored when the user reopens a chat
@@ -111,7 +112,7 @@ Two-panel layout separated by a resizable splitter (default ratio **1:3**, left:
 | Format   | Parser            |
 |----------|-------------------|
 | PDF      | `pdf-parse`       |
-| Markdown | Built-in regex stripper (removes YAML front matter, syntax markers); image references replaced with inline `[IMAGE_REF:path]` tokens to preserve position through chunking |
+| Markdown | Built-in regex stripper (removes YAML front matter, syntax markers); image references replaced with inline `[IMAGE_REF:path]` tokens to preserve position through chunking; `` ```graphviz `` fenced blocks rendered to SVG (see §4.3) |
 | DOCX     | `mammoth`         |
 
 #### Upload Modes
@@ -129,6 +130,32 @@ When a `.md` file is uploaded inside a ZIP archive that also contains image file
 4. Each `KBChunk` node stores the resolved public URLs of images that appeared within it
 5. Images are served via the existing `/uploads` static route
 
+#### 4.3 Graphviz Diagram Rendering
+
+Markdown files may contain `` ```graphviz `` fenced blocks with DOT source (e.g. flow diagrams
+in Andor documentation). These are handled during extraction:
+
+1. `renderGraphvizBlocks()` in `backend/ingestion/graphviz_renderer.js` renders each block to SVG
+   using `@hpcc-js/wasm` (pure WASM — no system `dot` binary required)
+2. Each SVG is resized to fit within `SVG_MAX_WIDTH × SVG_MAX_HEIGHT` (default 800 × 600 px,
+   configurable via `.env`); aspect ratio is always preserved
+3. The block is replaced with an `[IMAGE_REF:graphviz-<sha256>.svg]` token
+4. The SVG buffer is merged into the `imageMap` with the correct `zipDir` prefix so
+   `image_resolver` can find it by path
+5. Chunks containing only an `IMAGE_REF` token (diagram-only files) are kept by the chunker
+   via a minimum-word-count exception, so the image is never lost
+
+Filename is content-addressed (SHA-256 of DOT source) → idempotent re-ingestion.
+
+#### 4.4 Idempotent Batch Re-ingestion
+
+Before ingesting each file in a batch ZIP, the backend calls `purgeByFilepath(zipPath)`:
+1. Finds all `KBDocument` nodes with the same `filepath` in Neo4j
+2. Deletes their graph nodes (document + chunks) via `deleteDocument()`
+3. Removes the corresponding `uploads/kb-images/<docId>/` directory from disk
+
+This guarantees that re-uploading a ZIP never creates duplicate chunks or duplicate images in search results.
+
 #### Real-time Progress (Batch)
 
 Batch ingestion uses **Server-Sent Events (SSE)**:
@@ -142,9 +169,9 @@ Batch ingestion uses **Server-Sent Events (SSE)**:
 
 For each document:
 
-1. **Text extraction** — by file extension (PDF / MD / DOCX); for Markdown, image refs become `[IMAGE_REF:path]` tokens
+1. **Text extraction** — by file extension (PDF / MD / DOCX); for Markdown, `` ```graphviz `` blocks are rendered to SVG first, then image refs become `[IMAGE_REF:path]` tokens; DOT source is captured separately for summary generation
 2. **Language detection** — heuristic on first 500 chars (English vs French default)
-3. **Document summary** — Gemini call on first 3000 chars; used as context for enrichment
+3. **Document summary** — `buildSummaryInput()` constructs the Gemini prompt: uses prose text when available; falls back to the raw DOT source + filepath when the file is diagram-only (otherwise the LLM hallucinates with no content to summarise)
 4. **Chunking** — 500-word chunks, 50-word overlap (IMAGE_REF tokens travel with their surrounding text)
 5. **Image extraction** — `[IMAGE_REF:path]` tokens stripped from each chunk; resolved to public URLs using the saved image map; stored as `images: string[]` on the chunk; clean text used for enrichment
 6. **LLM enrichment per chunk** (single Gemini call):
@@ -174,7 +201,44 @@ For each document:
 
 ---
 
-### 7. Conversation Persistence
+### 7. Document Management UI (Admin — Knowledge Base dialog)
+
+The Knowledge Base dialog has four tabs:
+
+| Tab | Purpose |
+|-----|---------|
+| Add document | Single PDF / MD / DOCX upload with optional document date |
+| Batch processing | ZIP upload with live SSE progress log (preserved across tab switches) |
+| Documents | Folder tree + per-document preview + update button |
+| Management | Full KB reset |
+
+#### Documents tab — folder tree
+Documents are grouped by the folder prefix of their `filepath` (the full path inside the ZIP,
+e.g. `Block/Concept.md` → folder `Block`). Folders are collapsible; root-level files always visible.
+The document count in the tab button updates live as each file finishes ingestion.
+
+#### Per-document expand / preview
+Clicking a document row expands it to show:
+- The stored **summary** (2–3 sentence LLM-generated description; for diagram-only files the summary describes the diagram content derived from the DOT source and filepath)
+- Up to 4 **image thumbnails** fetched from `GET /api/knowledge-base/documents/:id/images`
+  (click to open full-size in a new tab)
+
+#### Update button
+Each document row has a ↻ button that opens a file picker. After selecting a replacement file,
+a "Confirm update / Cancel" prompt appears inline. On confirm:
+1. `POST /api/knowledge-base/documents/:id/update` — deletes old graph nodes + images,
+   re-ingests the new file, **preserves the original `filepath`** so the document stays in the
+   same folder in the tree
+2. Image cache for that document is cleared so the preview reloads fresh
+
+#### filepath persistence
+`KBDocument` nodes store a `filepath` property (full ZIP-relative path, e.g. `Block/Concept.md`).
+Single-file uploads use the filename as filepath. The field is populated during ingestion and
+returned by `GET /api/knowledge-base/documents`.
+
+---
+
+### 8. Conversation Persistence
 
 All conversations stored in SQLite:
 
@@ -186,16 +250,63 @@ users → projects → chats → messages
 - `GET /api/projects`, `POST /api/projects`, `PATCH/DELETE /api/projects/:id`
 - `POST /api/projects/:id/chats`, `PATCH/DELETE /api/chats/:id`
 - `GET/POST /api/chats/:id/messages`
+- `messages` table stores `images TEXT DEFAULT '[]'` (JSON array of public URLs) so
+  assistant responses with diagrams/images are fully restored on session reload
+
+#### Language persistence
+- `chats.lang` (SQLite) stores the selected language per chat
+- Language is saved on: chat creation, rename, and every time the user changes the selector
+- Language is restored when switching to a chat; if it already matches the UI state the
+  persist effect is skipped (no spurious PATCH)
+- Local `projects` state is kept in sync with the saved lang to prevent stale-state overwrite
+  during auto-title updates (first message)
 
 ---
 
-### 8. Non-Functional Requirements
+### 9. Non-Functional Requirements
 
 - Cookie-based sessions (7-day TTL, in-memory store — lost on restart)
 - SMTP email (Nodemailer, sender: "HORIBA Astra Knowledge System"): verification, approval, rejection emails
 - DNS IPv4 resolution for SMTP host at startup
 - Role-based access control enforced server-side (`requireAuth`, `requireAdmin` middleware)
 - Multer file size limits: 50 MB (single), 200 MB (batch ZIP)
+
+---
+
+### 10. Docker Deployment
+
+All deployment artifacts live in `docker/`.
+
+#### Services
+
+| Service | Image | Exposed port |
+|---------|-------|--------------|
+| `backend` | `node:22-bookworm-slim` (multi-stage) | internal :3001 |
+| `frontend` | `nginx:1.27-alpine` (multi-stage React build) | host `HTTP_PORT` (default 80) |
+
+Nginx serves the compiled React SPA and reverse-proxies `/api/*`, `/auth/*`, `/uploads/*` to the backend container. SSE buffering is disabled on the proxy for real-time batch progress.
+
+#### External mounts (nothing persistent bakes into images)
+
+| Host path | Container path | Content |
+|-----------|---------------|---------|
+| `docker/data/backend.env` | `/app/.env` (read-only) | All runtime secrets |
+| `docker/data/uploads/` | `/data/uploads` | KB images |
+| `docker/data/users.db` | `/data/users.db` | SQLite DB |
+
+#### Build-time variables
+
+`VITE_GEMINI_API_KEY` is passed as a Docker build ARG and embedded in the frontend JS bundle at build time (the frontend calls Gemini directly for chat). Changing the key requires a frontend rebuild.
+
+#### Quick start
+
+```bash
+cd docker/
+cp .env.example .env                          # set VITE_GEMINI_API_KEY, HTTP_PORT
+cp data/backend.env.example data/backend.env  # set all credentials
+touch data/users.db && mkdir -p data/uploads
+docker compose up -d --build
+```
 
 ---
 

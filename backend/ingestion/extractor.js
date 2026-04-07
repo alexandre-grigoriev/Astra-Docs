@@ -52,6 +52,12 @@ async function extractMarkdown(buffer) {
   // Strip YAML front matter (--- blocks at top of file)
   text = text.replace(/^---[\s\S]*?---\s*\n?/, '');
 
+  // Capture DOT source content BEFORE rendering so it can be used in the
+  // document summary even when there is no other text in the file.
+  const dotSources = [];
+  text.replace(/```graphviz\r?\n([\s\S]*?)```/g, (_, src) => { dotSources.push(src.trim()); });
+  const dotContent = dotSources.join('\n\n');
+
   // Render graphviz blocks to SVG BEFORE stripping code blocks
   const { markdown: renderedText, generatedImages } = await renderGraphvizBlocks(text);
   text = renderedText;
@@ -74,7 +80,7 @@ async function extractMarkdown(buffer) {
   text = text.replace(/<[^>]+>/g, '');                    // residual HTML tags
 
   text = normalise(text);
-  return { text, imageRefs, generatedImages, mimeType: 'md' };
+  return { text, imageRefs, generatedImages, dotContent, mimeType: 'md' };
 }
 
 async function extractDocx(buffer) {

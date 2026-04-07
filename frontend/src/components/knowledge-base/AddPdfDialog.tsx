@@ -1,10 +1,27 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X } from "lucide-react";
+import { X, ChevronRight, ChevronDown, RefreshCw, Trash2 } from "lucide-react";
 import { cn } from "../../utils";
 
-interface KBDocument { id: string; filename: string; lang: string; summary: string; chunkCount: number; uploadedAt: string; documentDate?: string; }
+interface KBDocument { id: string; filename: string; filepath: string; lang: string; summary: string; chunkCount: number; uploadedAt: string; documentDate?: string; }
 interface ProgressEntry { filename: string; chunkCount?: number; error?: string; ok: boolean; }
+
+/** Groups a flat doc list into a folder tree keyed by folder path. */
+function buildTree(docs: KBDocument[]): Map<string, KBDocument[]> {
+  const tree = new Map<string, KBDocument[]>();
+  for (const doc of docs) {
+    const parts = (doc.filepath || doc.filename).split("/");
+    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+    if (!tree.has(folder)) tree.set(folder, []);
+    tree.get(folder)!.push(doc);
+  }
+  // Sort folders: root first, then alphabetically
+  return new Map([...tree.entries()].sort((a, b) => {
+    if (a[0] === "") return -1;
+    if (b[0] === "") return 1;
+    return a[0].localeCompare(b[0]);
+  }));
+}
 
 const ACCEPT = ".pdf,.md,.markdown,.docx";
 
@@ -28,7 +45,13 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [progress, setProgress] = useState<ProgressEntry[]>([]);
 
   const [docs, setDocs] = useState<KBDocument[]>([]);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleting, setDeleting]     = useState<string | null>(null);
+  const [expanded, setExpanded]     = useState<Set<string>>(new Set());
+  const [docImages, setDocImages]   = useState<Record<string, string[]>>({});
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+  // update: docId → { file, uploading, error, success }
+  const [updating, setUpdating]     = useState<Record<string, { file: File | null; uploading: boolean; error: string; success: string }>>({});
+  const updateInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const batchInputRef = useRef<HTMLInputElement>(null);
   const progressRef   = useRef<HTMLDivElement>(null);
@@ -54,7 +77,7 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
     if (progressRef.current) progressRef.current.scrollTop = progressRef.current.scrollHeight;
   }, [progress, currentFile]);
 
-  function clearTab() { setError(""); setSuccess(""); setProgress([]); setCurrentFile(null); }
+  function clearTab() { setError(""); setSuccess(""); }
 
   async function doReset() {
     setResetting(true);
@@ -119,6 +142,7 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
       const { filename, chunkCount } = JSON.parse(e.data);
       setCurrentFile(null);
       setProgress(prev => [...prev, { filename, chunkCount, ok: true }]);
+      loadDocs();
     });
 
     es.addEventListener("file_error", (e) => {
@@ -143,6 +167,53 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
       setCurrentFile(null);
       setError("Connection to progress stream lost.");
     };
+  }
+
+  // ── Expand / preview ────────────────────────────────────────────────────────
+
+  async function toggleExpand(doc: KBDocument) {
+    const next = new Set(expanded);
+    if (next.has(doc.id)) {
+      next.delete(doc.id);
+    } else {
+      next.add(doc.id);
+      if (!docImages[doc.id]) {
+        try {
+          const res = await fetch(`/api/knowledge-base/documents/${doc.id}/images`, { credentials: "include" });
+          if (res.ok) {
+            const { images } = await res.json();
+            setDocImages(prev => ({ ...prev, [doc.id]: images }));
+          }
+        } catch {}
+      }
+    }
+    setExpanded(next);
+  }
+
+  // ── Update ───────────────────────────────────────────────────────────────────
+
+  function initUpdate(docId: string) {
+    setUpdating(prev => ({ ...prev, [docId]: { file: null, uploading: false, error: "", success: "" } }));
+    // Trigger file picker
+    setTimeout(() => updateInputRefs.current[docId]?.click(), 50);
+  }
+
+  async function doUpdate(doc: KBDocument) {
+    const state = updating[doc.id];
+    if (!state?.file) return;
+    setUpdating(prev => ({ ...prev, [doc.id]: { ...prev[doc.id], uploading: true, error: "", success: "" } }));
+    try {
+      const form = new FormData();
+      form.append("file", state.file);
+      const res = await fetch(`/api/knowledge-base/documents/${doc.id}/update`, { method: "POST", credentials: "include", body: form });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error ?? "Update failed"); }
+      setUpdating(prev => ({ ...prev, [doc.id]: { file: null, uploading: false, error: "", success: "Updated successfully." } }));
+      // Clear preview images so they reload on next expand
+      setDocImages(prev => { const n = { ...prev }; delete n[doc.id]; return n; });
+      loadDocs();
+    } catch (e) {
+      setUpdating(prev => ({ ...prev, [doc.id]: { ...prev[doc.id], uploading: false, error: e instanceof Error ? e.message : "Update failed" } }));
+    }
   }
 
   // ── Delete ──────────────────────────────────────────────────────────────────
@@ -287,31 +358,111 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
                 </>
               )}
 
-              {/* ── Document list ── */}
-              {tab === "docs" && (
-                <>
-                  <div className="presForm" style={{ maxHeight: 360, overflowY: "auto", marginTop: 16 }}>
-                    {docs.length === 0 ? (
-                      <div style={{ fontSize: 13, color: "#9ca3af", fontStyle: "italic" }}>No documents yet.</div>
-                    ) : docs.map(doc => (
-                      <div key={doc.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 8 }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.filename}</div>
-                          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{doc.chunkCount} chunks · {doc.lang.toUpperCase()}{doc.documentDate ? ` · ${doc.documentDate}` : ""}</div>
-                          {doc.summary && <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4, lineHeight: 1.4 }}>{doc.summary.slice(0, 120)}{doc.summary.length > 120 ? "…" : ""}</div>}
+              {/* ── Document list (folder tree) ── */}
+              {tab === "docs" && (() => {
+                const tree = buildTree(docs);
+                return (
+                  <>
+                    <div className="presForm" style={{ maxHeight: 420, overflowY: "auto", marginTop: 16 }}>
+                      {docs.length === 0 ? (
+                        <div style={{ fontSize: 13, color: "#9ca3af", fontStyle: "italic" }}>No documents yet.</div>
+                      ) : [...tree.entries()].map(([folder, folderDocs]) => (
+                        <div key={folder || "__root__"} style={{ marginBottom: 8 }}>
+                          {/* Folder header (only shown if there is a folder) */}
+                          {folder && (
+                            <button
+                              onClick={() => setOpenFolders(prev => { const n = new Set(prev); n.has(folder) ? n.delete(folder) : n.add(folder); return n; })}
+                              style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4 }}
+                            >
+                              {openFolders.has(folder) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              <span style={{ fontFamily: "monospace" }}>📁 {folder}</span>
+                              <span style={{ marginLeft: "auto", fontWeight: 400, color: "#9ca3af" }}>{folderDocs.length} file{folderDocs.length !== 1 ? "s" : ""}</span>
+                            </button>
+                          )}
+
+                          {/* Docs in this folder — always visible for root, toggled for named folders */}
+                          {(!folder || openFolders.has(folder)) && folderDocs.map(doc => {
+                            const isExpanded  = expanded.has(doc.id);
+                            const images      = docImages[doc.id] ?? [];
+                            const upd         = updating[doc.id];
+                            return (
+                              <div key={doc.id} style={{ marginLeft: folder ? 16 : 0, marginBottom: 6, border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
+                                {/* Doc row */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "#f9fafb", cursor: "pointer" }}
+                                  onClick={() => toggleExpand(doc)}>
+                                  <span style={{ color: "#9ca3af", flexShrink: 0 }}>{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+                                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.filename}</span>
+                                  <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>{doc.chunkCount} chunks · {doc.lang.toUpperCase()}{doc.documentDate ? ` · ${doc.documentDate}` : ""}</span>
+                                  {/* Hidden file input for update */}
+                                  <input type="file" accept={ACCEPT} style={{ display: "none" }}
+                                    ref={el => { updateInputRefs.current[doc.id] = el; }}
+                                    onChange={e => {
+                                      const f = e.target.files?.[0] ?? null;
+                                      if (f) setUpdating(prev => ({ ...prev, [doc.id]: { file: f, uploading: false, error: "", success: "" } }));
+                                      e.target.value = "";
+                                    }}
+                                  />
+                                  <button onClick={e => { e.stopPropagation(); initUpdate(doc.id); }} title="Upload new version"
+                                    style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", color: "#9ca3af", flexShrink: 0 }}
+                                    onMouseEnter={e => (e.currentTarget.style.color = "#2563eb")}
+                                    onMouseLeave={e => (e.currentTarget.style.color = "#9ca3af")}>
+                                    <RefreshCw size={14} />
+                                  </button>
+                                  <button onClick={e => { e.stopPropagation(); doDelete(doc); }} disabled={deleting === doc.id} title="Remove"
+                                    style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", color: "#9ca3af", flexShrink: 0 }}
+                                    onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")}
+                                    onMouseLeave={e => (e.currentTarget.style.color = "#9ca3af")}>
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+
+                                {/* Expanded preview */}
+                                {isExpanded && (
+                                  <div style={{ padding: "10px 14px", background: "#fff", borderTop: "1px solid #e5e7eb" }}>
+                                    {doc.summary && (
+                                      <p style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.5, margin: "0 0 10px" }}>{doc.summary}</p>
+                                    )}
+                                    {images.length > 0 && (
+                                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                        {images.slice(0, 4).map(url => (
+                                          <img key={url} src={url} alt=""
+                                            style={{ height: 80, width: "auto", borderRadius: 6, border: "1px solid #e5e7eb", cursor: "zoom-in", objectFit: "contain", background: "#f9fafb" }}
+                                            onClick={() => window.open(url, "_blank")}
+                                          />
+                                        ))}
+                                        {images.length > 4 && <span style={{ fontSize: 12, color: "#9ca3af", alignSelf: "center" }}>+{images.length - 4} more</span>}
+                                      </div>
+                                    )}
+                                    {/* Pending update */}
+                                    {upd?.file && (
+                                      <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+                                        <span style={{ fontSize: 12, color: "#374151" }}>Replace with: <strong>{upd.file.name}</strong></span>
+                                        <button className="presSubmitBtn" style={{ padding: "4px 12px", fontSize: 12 }}
+                                          onClick={() => doUpdate(doc)} disabled={upd.uploading}>
+                                          {upd.uploading ? "Updating…" : "Confirm update"}
+                                        </button>
+                                        <button className="presCancelBtn" style={{ padding: "4px 10px", fontSize: 12 }}
+                                          onClick={() => setUpdating(prev => { const n = { ...prev }; delete n[doc.id]; return n; })}>
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    )}
+                                    {upd?.error   && <div style={{ marginTop: 6, fontSize: 12, color: "#dc2626" }}>{upd.error}</div>}
+                                    {upd?.success && <div style={{ marginTop: 6, fontSize: 12, color: "#16a34a" }}>{upd.success}</div>}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
-                        <button onClick={() => doDelete(doc)} disabled={deleting === doc.id} title="Remove"
-                          style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 6px", color: "#9ca3af", fontSize: 18, lineHeight: 1, flexShrink: 0 }}
-                          onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")}
-                          onMouseLeave={e => (e.currentTarget.style.color = "#9ca3af")}>✕</button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="presFooter">
-                    <button className="presCancelBtn" onClick={onClose}>Close</button>
-                  </div>
-                </>
-              )}
+                      ))}
+                    </div>
+                    <div className="presFooter">
+                      <button className="presCancelBtn" onClick={onClose}>Close</button>
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* ── Management ── */}
               {tab === "manage" && (

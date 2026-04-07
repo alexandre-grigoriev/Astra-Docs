@@ -52,6 +52,7 @@ for (const col of [
   "ALTER TABLE users ADD COLUMN verify_expires TEXT",
   "ALTER TABLE users ADD COLUMN status        TEXT NOT NULL DEFAULT 'approved'",
   "ALTER TABLE chats ADD COLUMN lang TEXT NOT NULL DEFAULT 'fr'",
+  "ALTER TABLE messages ADD COLUMN images TEXT NOT NULL DEFAULT '[]'",
 ]) {
   try { db.exec(col); } catch { /* column already exists */ }
 }

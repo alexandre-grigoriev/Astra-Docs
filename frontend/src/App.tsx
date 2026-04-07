@@ -126,28 +126,32 @@ export default function App() {
     }
   }, [user]);
 
-  // Load messages and restore language when chat is activated.
-  const langRestoredBySwitch = useRef(false);
+  // Restore language when chat is activated.
+  // Depends on both activeChatId AND projects — projects load async after mount.
   const activeChatIdRef = useRef<string | null>(activeChatId);
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
     if (!activeChatId) return;
     loadMessages(activeChatId);
     const chat = projects.flatMap(p => p.chats).find(c => c.id === activeChatId);
-    if (chat?.lang) {
-      langRestoredBySwitch.current = true; // suppress save for this lang change
-      setLang(chat.lang);
-    }
-  }, [activeChatId]);
+    if (chat?.lang) setLang(chat.lang);
+  }, [activeChatId, projects]);
 
-  // Persist language to the active chat only when the user explicitly changes it
-  // (not when it was restored by switching chats).
+  // Persist language to the active chat on every change:
+  // - user moves the dropdown
+  // - chat switch restores a different lang (idempotent — same value already saved)
+  // - lang changed while chat is empty
   const isFirstLangRender = useRef(true);
   useEffect(() => {
     if (isFirstLangRender.current) { isFirstLangRender.current = false; return; }
-    if (langRestoredBySwitch.current) { langRestoredBySwitch.current = false; return; }
-    if (!activeChatIdRef.current) return;
-    fetch(`/api/chats/${activeChatIdRef.current}`, {
+    const chatId = activeChatIdRef.current;
+    if (!chatId) return;
+    // Keep local projects state in sync so the restore effect never reads a stale lang
+    // (e.g. first-message auto-title triggers setProjects and re-runs restore).
+    setProjects(prev => prev.map(p => ({
+      ...p, chats: p.chats.map(c => c.id === chatId ? { ...c, lang } : c),
+    })));
+    fetch(`/api/chats/${chatId}`, {
       method: "PATCH", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lang }),
@@ -221,8 +225,15 @@ export default function App() {
       });
       if (res.ok) {
         const chat = await res.json();
+        // Immediately persist the current UI language so restoring this chat
+        // later always returns to the correct language (not the DB default 'fr').
+        fetch(`/api/chats/${chat.id}`, {
+          method: "PATCH", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lang }),
+        }).catch(() => {});
         setProjects((prev) => prev.map((p) =>
-          p.id === projectId ? { ...p, chats: [...p.chats, chat] } : p
+          p.id === projectId ? { ...p, chats: [...p.chats, { ...chat, lang }] } : p
         ));
         setActiveProjectId(projectId);
         setActiveChatId(chat.id);
@@ -238,7 +249,7 @@ export default function App() {
       await fetch(`/api/chats/${chatId}`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: trimmed }),
+        body: JSON.stringify({ title: trimmed, lang }),
       });
       setProjects((prev) => prev.map((p) =>
         p.id === projectId ? { ...p, chats: p.chats.map((c) => c.id === chatId ? { ...c, title: trimmed } : c) } : p

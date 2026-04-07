@@ -53,7 +53,8 @@ export async function listDocuments() {
   const records = await readQuery(
     `MATCH (d:KBDocument)
      OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:KBChunk)
-     RETURN d.id AS id, d.filename AS filename, d.mimeType AS mimeType,
+     RETURN d.id AS id, d.filename AS filename, d.filepath AS filepath,
+            d.mimeType AS mimeType,
             d.language AS language, d.summary AS summary,
             d.uploadedAt AS uploadedAt, d.wordCount AS wordCount,
             d.documentDate AS documentDate,
@@ -63,6 +64,7 @@ export async function listDocuments() {
   return records.map(r => ({
     id:           r.id,
     filename:     r.filename     ?? '',
+    filepath:     r.filepath     ?? r.filename ?? '',
     mimeType:     r.mimeType     ?? '',
     lang:         r.language     ?? 'en',
     summary:      r.summary      ?? '',
@@ -103,6 +105,21 @@ export async function resetKnowledgeBase() {
      WHERE n:KBDocument OR n:KBChunk OR n:KBEntity
      DETACH DELETE n`
   );
+}
+
+/**
+ * Finds all KBDocument nodes with the given filepath.
+ * Used by batch ingest to purge stale documents before re-ingesting the same file.
+ *
+ * @param {string} filepath - full relative path inside ZIP (e.g. "Block/Concept.md")
+ * @returns {Promise<string[]>} - array of docIds
+ */
+export async function findDocumentIdsByFilepath(filepath) {
+  const records = await readQuery(
+    `MATCH (d:KBDocument { filepath: $filepath }) RETURN d.id AS id`,
+    { filepath }
+  );
+  return records.map(r => r.id).filter(Boolean);
 }
 
 /**
