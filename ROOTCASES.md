@@ -208,3 +208,74 @@ the field to `lang` (matching the frontend's expected key name).
 **File:** `backend/graph/queries/document.js`
 
 ---
+
+## RC-012 — KB images written to wrong path inside Docker (404 after ingestion)
+
+**Symptom:** Images were ingested and appeared to succeed, but all
+`/uploads/kb-images/…` URLs returned 404 when running in Docker.
+Files were not found in the mounted volume at `data/uploads/kb-images/` on the
+host.
+
+**Root cause:** `KB_IMAGES_DIR` in `image_resolver.js` was computed as:
+```js
+path.join(__dirname, '..', '..', 'uploads', 'kb-images')
+```
+Inside the Docker container `__dirname` resolves to `/app/backend/ingestion/`,
+so images were written to `/app/uploads/kb-images/` — a path **inside the
+container image layer**, not in the mounted volume at `/data/uploads/`.
+The `UPLOADS_DIR=/data/uploads` environment variable injected by
+`docker-compose.yml` was completely ignored.
+
+**Fix:** Changed `KB_IMAGES_DIR` to respect `UPLOADS_DIR`:
+```js
+export const KB_IMAGES_DIR = path.join(
+  process.env.UPLOADS_DIR ?? path.join(__dirname, '..', '..', 'uploads'),
+  'kb-images'
+);
+```
+With `UPLOADS_DIR=/data/uploads` set in compose, images are now written to
+`/data/uploads/kb-images/` which is the volume-mounted path.
+
+**File:** `backend/ingestion/image_resolver.js`
+
+---
+
+## RC-013 — Nginx static-assets regex intercepted `/uploads/` paths (SVG 404)
+
+**Symptom:** After fixing RC-012, images were present on disk and visible inside
+the container, but SVG files (Graphviz diagrams) still returned HTTP 404 from
+Nginx. PNG/JPG files were also affected. Backend logs showed no request ever
+reached the backend for these URLs.
+
+**Root cause:** `docker/nginx.conf` had two relevant locations:
+```nginx
+# 1. static assets regex — matched FIRST
+location ~* \.(js|css|png|jpg|jpeg|gif|svg|ico|…)$ {
+    try_files $uri =404;   # looks in /usr/share/nginx/html — file not there → 404
+}
+
+# 2. backend proxy — never reached for image extensions
+location ~ ^/(api|auth|uploads)(/.*)?$ {
+    proxy_pass http://backend:3001;
+}
+```
+In Nginx, **regex locations (`~`, `~*`) are tested in declaration order**.
+A request for `/uploads/kb-images/docId/image.svg` matched the static-assets
+regex first (because `.svg` is in the extension list) and hit `try_files $uri =404`
+against the HTML root — where the file does not exist — returning 404 without
+ever proxying to the backend.
+
+**Fix:** Added a `location ^~ /uploads/` block **before** the static-assets regex:
+```nginx
+location ^~ /uploads/ {
+    proxy_pass http://backend:3001;
+    …
+}
+```
+The `^~` (prefix with no-regex) modifier has higher Nginx priority than any
+regex location and prevents further regex matching once it matches, so all
+`/uploads/` paths are always proxied regardless of file extension.
+
+**File:** `docker/nginx.conf`
+
+---

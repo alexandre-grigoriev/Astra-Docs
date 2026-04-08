@@ -43,3 +43,7 @@ uploads/
 # Docker runtime data (secrets + persistent volumes — never commit)
 docker/data/
 docker/.env
+
+# Docker export packages
+docker/*.tar.gz
+docker/astra-docs-deploy-*/

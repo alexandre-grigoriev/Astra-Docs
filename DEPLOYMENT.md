@@ -3,6 +3,128 @@
 Deployment guide for production using Docker Compose.  
 All deployment artifacts live in the `docker/` folder.
 
+Two deployment modes are supported:
+
+| Mode | When to use |
+|------|-------------|
+| **A — Package deploy** (recommended) | No git on the server. Build images on dev machine, ship a self-contained archive. |
+| **B — Clone & build** | Git is available on the server. Clone the repo and build images there. |
+
+---
+
+## Mode A — Deploy without cloning the repository
+
+Two sub-options depending on whether the target server can reach the internet.
+
+---
+
+### A1 — Via Docker Hub (recommended)
+
+Images are pushed to `aipoclab` on Docker Hub.  
+The server only needs Docker and a compose file — no source code, no tarballs.
+
+#### On your dev machine (Windows) — push images
+
+```powershell
+# First time only — log in to Docker Hub
+docker login -u aipoclab
+
+# Build and push (run from the docker\ directory)
+.\push.ps1              # pushes aipoclab/astra-docs-backend:latest
+                        #        aipoclab/astra-docs-frontend:latest
+
+# To push a versioned release as well:
+.\push.ps1 1.2.0        # pushes :1.2.0 AND :latest
+```
+
+> **PowerShell execution policy:** if scripts are blocked, run once:
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+
+#### On the Linux server — first install
+
+Copy the three files below to the server (no source code needed):
+
+```
+docker/docker-compose.release.yml  →  ~/astra-docs/docker-compose.yml
+docker/.env.example                →  ~/astra-docs/.env.example
+docker/data/backend.env.example    →  ~/astra-docs/data/backend.env.example
+docker/install.sh                  →  ~/astra-docs/install.sh
+```
+
+Or copy them from your Windows machine with `scp` (available in PowerShell / CMD):
+
+```powershell
+# Run from the project root
+ssh user@server "mkdir -p ~/astra-docs/data"
+scp docker\docker-compose.release.yml user@server:~/astra-docs/docker-compose.yml
+scp docker\.env.example               user@server:~/astra-docs/
+scp docker\data\backend.env.example   user@server:~/astra-docs/data/
+scp docker\install.sh                 user@server:~/astra-docs/
+```
+
+Then on the server:
+
+```bash
+cd ~/astra-docs
+bash install.sh
+```
+
+`install.sh` will:
+- Install Docker Engine if not present
+- Create `data/` directories and an empty `users.db`
+- Open `.env` and `data/backend.env` in `nano` for credentials
+- Run `docker compose pull` (pulls images from Docker Hub)
+- Start the stack
+
+#### Updating the application
+
+```powershell
+# Windows dev machine — after code changes
+cd docker
+.\push.ps1
+```
+
+```bash
+# Linux server — pull new images and restart
+cd ~/astra-docs
+docker compose pull && docker compose up -d
+```
+
+> `data/` is never touched — users, chats, KB images, and credentials survive every update.
+
+---
+
+### A2 — Via tarball (air-gapped servers, no internet)
+
+Use this only if the target server cannot reach Docker Hub.
+
+```powershell
+# Windows dev machine — builds images and packages everything into one archive
+cd docker
+.\export.ps1
+# produces docker\astra-docs-deploy-<date>.tar.gz
+```
+
+```powershell
+# Transfer to the server
+scp docker\astra-docs-deploy-*.tar.gz user@server:~/
+```
+
+```bash
+# Linux server
+tar -xzf astra-docs-deploy-*.tar.gz
+cd astra-docs-deploy-*
+bash install.sh    # loads images from tarballs, no internet needed
+```
+
+---
+
+## Mode B — Clone & build on the server (Linux dev machine)
+
+> Use this if your dev machine is Linux, git is available on the server,
+> and you prefer to build images there. Use the bash scripts (`push.sh`, `export.sh`)
+> instead of the PowerShell ones.
+
 ---
 
 ## Architecture
@@ -290,5 +412,7 @@ Key changes required when switching to HTTPS:
 | Neo4j connection refused | `NEO4J_URI` uses `localhost` | Use host LAN IP instead |
 | LDAP login fails with cert error | Self-signed LDAPS cert | Add `NODE_TLS_REJECT_UNAUTHORIZED: "0"` in compose |
 | Images not loading after re-ingest | Old chunks in Neo4j (pre-fix) | Re-ingest — `purgeByFilepath` now cleans up before each file |
+| KB images 404 — files missing from `data/uploads/` | `UPLOADS_DIR` env var not respected (RC-012) | Ensure `UPLOADS_DIR: /data/uploads` is set under backend `environment:` in compose; images were previously written inside the container layer |
+| KB images 404 — files exist on disk but Nginx returns 404 | Nginx static-assets regex matched `.svg`/`.png` before the `/uploads/` proxy (RC-013) | Fixed in `docker/nginx.conf`: `location ^~ /uploads/` now appears before the static-assets regex block |
 | `VITE_GEMINI_API_KEY` not working | Key not set at build time | Rebuild frontend: `docker compose build frontend` |
 | Port 80 already in use | Another service on the host | Set `HTTP_PORT=8080` in `docker/.env` |

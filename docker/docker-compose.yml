@@ -2,6 +2,7 @@ services:
 
   # ── Backend — Node.js / Express ──────────────────────────────────────────────
   backend:
+    image: aipoclab/astra-docs-backend:latest
     build:
       context: ..                          # project root
       dockerfile: docker/Dockerfile.backend
@@ -27,6 +28,7 @@ services:
 
   # ── Frontend — React SPA served by Nginx (also reverse-proxies the backend) ─
   frontend:
+    image: aipoclab/astra-docs-frontend:latest
     build:
       context: ..                          # project root
       dockerfile: docker/Dockerfile.frontend

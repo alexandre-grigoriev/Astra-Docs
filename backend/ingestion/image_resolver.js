@@ -12,8 +12,12 @@ import { logger }  from '../utils/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Absolute path to the kb-images directory on disk.
- *  image_resolver.js lives at backend/ingestion/, so ../../uploads → project root /uploads */
-export const KB_IMAGES_DIR = path.join(__dirname, '..', '..', 'uploads', 'kb-images');
+ *  Respects UPLOADS_DIR env var so Docker volume mounts work correctly.
+ *  Falls back to ../../uploads (project root /uploads) for local dev. */
+export const KB_IMAGES_DIR = path.join(
+  process.env.UPLOADS_DIR ?? path.join(__dirname, '..', '..', 'uploads'),
+  'kb-images'
+);
 
 const IMAGE_REF_RE = /\[IMAGE_REF:([^\]]+)\]/g;
 
