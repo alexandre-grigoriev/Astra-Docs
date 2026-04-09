@@ -20,7 +20,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter,
 
 .brandLeft { display: flex; align-items: center; gap: 12px; }
 .brandHoriba { height: auto; width: auto; margin-left: 5px; }
-.brandName { font-size: 40px; position: absolute; left: 50%; transform: translateX(-50%); font-weight: 900; color: #478cd0; letter-spacing: 0.03em; text-transform: uppercase; }
+.brandName { font-size: 40px; position: absolute; left: 50%; top: calc(50% - 1px); transform: translateX(-50%) translateY(-50%) scaleX(1.3); font-weight: 900; color: #478cd0; letter-spacing: 0; text-transform: uppercase; }
 
 /* Select */
 .topSelectWrap { position: relative; }

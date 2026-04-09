@@ -239,13 +239,18 @@ ADMIN_SEED_EMAIL=admin@your-domain.com
 Optional but recommended:
 
 ```env
-# Email (leave SMTP_HOST empty to print links to logs instead)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=your@gmail.com
-SMTP_PASS=your-app-password
-SMTP_FROM="HORIBA Astra Knowledge System" <your@gmail.com>
+# Email — Resend (recommended) or SMTP fallback
+# Priority: RESEND_API_KEY > SMTP_HOST > dev mode (links logged only)
+RESEND_API_KEY=re_...
+SMTP_FROM="HORIBA Astra Knowledge System" <noreply@your-domain.com>
+
+# SMTP fallback (only used when RESEND_API_KEY is not set)
+#SMTP_HOST=smtp.gmail.com
+#SMTP_PORT=587
+#SMTP_SECURE=false
+#SMTP_USER=your@gmail.com
+#SMTP_PASS=your-app-password
+#SMTP_FROM="HORIBA Astra Knowledge System" <your@gmail.com>
 
 # Google OAuth
 GOOGLE_CLIENT_ID=...

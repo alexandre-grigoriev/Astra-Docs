@@ -1,41 +1,79 @@
 /**
- * email.js — SMTP transporter + verification email
+ * email.js — Resend (primary) + nodemailer SMTP (fallback)
+ *
+ * Priority:
+ *   1. RESEND_API_KEY set → use Resend API
+ *   2. SMTP_HOST set      → use nodemailer SMTP
+ *   3. Neither            → dev mode (links printed to console only)
  */
 import "dotenv/config";
 import dns from "dns";
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import { APP_BASE_URL, FRONTEND_ORIGIN } from "./shared.js";
 
-export const SMTP_FROM = process.env.SMTP_FROM ||
-  (process.env.SMTP_USER ? `"HORIBA Astra Knowledge System" <${process.env.SMTP_USER}>` : '"HORIBA Astra Knowledge System" <noreply@astra-docs.horiba.com>');
+// ── Transport selection ───────────────────────────────────────────────────────
+const USE_RESEND = !!process.env.RESEND_API_KEY;
+const USE_SMTP   = !USE_RESEND && !!process.env.SMTP_HOST;
 
-const _smtpHostResolved = process.env.SMTP_HOST
-  ? await new Promise((resolve) =>
-      dns.resolve4(process.env.SMTP_HOST, (err, addrs) => {
-        const ip = !err && addrs?.length ? addrs[0] : process.env.SMTP_HOST;
-        if (!err) console.log(`SMTP ${process.env.SMTP_HOST} → ${ip} (IPv4)`);
-        resolve(ip);
-      })
-    )
-  : null;
+// ── Sender address ────────────────────────────────────────────────────────────
+// RESEND_FROM is used when sending via Resend; SMTP_FROM when using SMTP.
+// Both fall back to a derived address if not explicitly set.
+export const MAIL_FROM =
+  (USE_RESEND ? process.env.RESEND_FROM : undefined) ||
+  process.env.SMTP_FROM ||
+  (process.env.SMTP_USER
+    ? `"HORIBA Astra Knowledge System" <${process.env.SMTP_USER}>`
+    : '"HORIBA Astra Knowledge System" <do_not_reply@horiba.com>');
 
-export const transporter = nodemailer.createTransport(
-  _smtpHostResolved
-    ? {
-        host:              _smtpHostResolved,
-        port:              parseInt(process.env.SMTP_PORT || "587"),
-        secure:            process.env.SMTP_SECURE === "true",
-        connectionTimeout: 5_000,
-        greetingTimeout:   5_000,
-        socketTimeout:     5_000,
-        auth: process.env.SMTP_USER
-          ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-          : undefined,
-        tls: { rejectUnauthorized: false },
-      }
-    : { jsonTransport: true }
-);
+let resend = null;
+let transporter = null;
 
+if (USE_RESEND) {
+  resend = new Resend(process.env.RESEND_API_KEY);
+  console.log("Email: using Resend API");
+} else if (USE_SMTP) {
+  const resolvedHost = await new Promise((resolve) =>
+    dns.resolve4(process.env.SMTP_HOST, (err, addrs) => {
+      const ip = !err && addrs?.length ? addrs[0] : process.env.SMTP_HOST;
+      if (!err) console.log(`SMTP ${process.env.SMTP_HOST} → ${ip} (IPv4)`);
+      resolve(ip);
+    })
+  );
+  transporter = nodemailer.createTransport({
+    host:              resolvedHost,
+    port:              parseInt(process.env.SMTP_PORT || "587"),
+    secure:            process.env.SMTP_SECURE === "true",
+    connectionTimeout: 5_000,
+    greetingTimeout:   5_000,
+    socketTimeout:     5_000,
+    auth: process.env.SMTP_USER
+      ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+      : undefined,
+    tls: { rejectUnauthorized: false },
+  });
+  console.log("Email: using SMTP");
+} else {
+  console.log("Email: dev mode — links printed to console only");
+}
+
+// ── Core send helper ──────────────────────────────────────────────────────────
+async function sendMail({ to, subject, html }) {
+  if (USE_RESEND) {
+    const { error } = await resend.emails.send({
+      from:    MAIL_FROM,
+      to:      [to],
+      subject,
+      html,
+    });
+    if (error) throw new Error(error.message);
+  } else if (USE_SMTP) {
+    await transporter.sendMail({ from: MAIL_FROM, to, subject, html });
+  }
+  // dev mode: no-op (caller already logged the link)
+}
+
+// ── Email templates ───────────────────────────────────────────────────────────
 function verificationEmailHtml(name, verifyUrl) {
   return `<!DOCTYPE html><html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -132,16 +170,16 @@ function rejectionEmailHtml(name) {
 </body></html>`;
 }
 
+// ── Public API ────────────────────────────────────────────────────────────────
 export async function sendApprovalEmail(email, name) {
   console.log("\n── Approval email ────────────────────────────────");
   console.log("To:", email);
   console.log("─────────────────────────────────────────────────\n");
-  if (!process.env.SMTP_HOST) return;
   try {
-    await transporter.sendMail({ from: SMTP_FROM, to: email, subject: "Your Astra Docs access has been approved", html: approvalEmailHtml(name) });
+    await sendMail({ to: email, subject: "Your Astra Docs access has been approved", html: approvalEmailHtml(name) });
     console.log("✓ Approval email sent to", email);
   } catch (err) {
-    console.error("✗ SMTP send failed:", err.message);
+    console.error("✗ Email send failed:", err.message);
   }
 }
 
@@ -149,12 +187,11 @@ export async function sendRejectionEmail(email, name) {
   console.log("\n── Rejection email ───────────────────────────────");
   console.log("To:", email);
   console.log("─────────────────────────────────────────────────\n");
-  if (!process.env.SMTP_HOST) return;
   try {
-    await transporter.sendMail({ from: SMTP_FROM, to: email, subject: "Your Astra Docs access request", html: rejectionEmailHtml(name) });
+    await sendMail({ to: email, subject: "Your Astra Docs access request", html: rejectionEmailHtml(name) });
     console.log("✓ Rejection email sent to", email);
   } catch (err) {
-    console.error("✗ SMTP send failed:", err.message);
+    console.error("✗ Email send failed:", err.message);
   }
 }
 
@@ -164,11 +201,10 @@ export async function sendVerificationEmail(email, name, token) {
   console.log("To:  ", email);
   console.log("Link:", verifyUrl);
   console.log("─────────────────────────────────────────────────\n");
-  if (!process.env.SMTP_HOST) return;
   try {
-    await transporter.sendMail({ from: SMTP_FROM, to: email, subject: "Confirm your Astra Docs account", html: verificationEmailHtml(name, verifyUrl) });
+    await sendMail({ to: email, subject: "Confirm your Astra Docs account", html: verificationEmailHtml(name, verifyUrl) });
     console.log("✓ Verification email sent to", email);
   } catch (err) {
-    console.error("✗ SMTP send failed:", err.message);
+    console.error("✗ Email send failed:", err.message);
   }
 }
