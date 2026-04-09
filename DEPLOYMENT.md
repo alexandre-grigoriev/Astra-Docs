@@ -397,15 +397,72 @@ The backend container resolves `NEO4J_URI` from **inside Docker**. Use:
 
 ---
 
-## HTTPS (optional)
+## HTTPS
 
-To serve over HTTPS, place a reverse proxy (Nginx, Traefik, Caddy) in front of the `frontend`
-container, or replace `docker/nginx.conf` with an SSL-enabled configuration.
+`nginx.conf` ships with HTTPS enabled (port 443) and HTTP→HTTPS redirect on port 80.
+SSL certificates must be provided on the host and mounted into the frontend container.
 
-Key changes required when switching to HTTPS:
-1. `FRONTEND_ORIGIN` and `APP_BASE_URL` → `https://your-domain.com`
-2. `COOKIE_SECURE=true` in `backend.env`
-3. `GOOGLE_REDIRECT_URI` → `https://your-domain.com/auth/google/callback`
+### Option A — Self-signed certificate (IP address, no domain)
+
+Use this when accessing the app by IP (e.g. `https://172.31.14.92:5234`).
+Browsers will show a one-time security warning that you can bypass.
+
+```bash
+# On the Linux server — generate cert (valid 10 years)
+sudo mkdir -p /etc/ssl/astra
+sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+  -keyout /etc/ssl/astra/privkey.pem \
+  -out /etc/ssl/astra/fullchain.pem \
+  -subj "/CN=172.31.14.92" \
+  -addext "subjectAltName=IP:172.31.14.92"
+sudo chmod 644 /etc/ssl/astra/privkey.pem   # nginx must be able to read it
+```
+
+> **Important:** `privkey.pem` is created `600` (root only) by openssl.
+> `chmod 644` is required — nginx inside the container cannot read it otherwise.
+
+Set port mapping in `~/astra-docs/.env`:
+```env
+HTTPS_PORT=5234   # host port → container 443 (HTTPS)
+HTTP_PORT=5235    # host port → container 80  (redirects to HTTPS)
+```
+
+Update `data/backend.env`:
+```env
+FRONTEND_ORIGIN=https://172.31.14.92:5234
+APP_BASE_URL=https://172.31.14.92:5234
+COOKIE_SECURE=true
+```
+
+### Option B — Let's Encrypt (requires a real domain)
+
+```bash
+sudo apt install certbot
+sudo certbot certonly --standalone -d your-domain.com
+sudo mkdir -p /etc/ssl/astra
+sudo cp /etc/letsencrypt/live/your-domain.com/fullchain.pem /etc/ssl/astra/
+sudo cp /etc/letsencrypt/live/your-domain.com/privkey.pem  /etc/ssl/astra/
+sudo chmod 644 /etc/ssl/astra/privkey.pem
+```
+
+Auto-renew (add to cron):
+```bash
+sudo crontab -e
+# Add:
+0 3 * * * certbot renew --quiet && cp /etc/letsencrypt/live/your-domain.com/*.pem /etc/ssl/astra/ && docker compose -f ~/astra-docs/docker-compose.yml restart frontend
+```
+
+### After any nginx.conf change — rebuild required
+
+`nginx.conf` is baked into the Docker image at build time. After any change:
+```powershell
+# Windows dev machine
+.\docker\push.ps1
+```
+```bash
+# Linux server
+docker compose pull && docker compose up -d
+```
 
 ---
 
@@ -421,3 +478,8 @@ Key changes required when switching to HTTPS:
 | KB images 404 — files exist on disk but Nginx returns 404 | Nginx static-assets regex matched `.svg`/`.png` before the `/uploads/` proxy (RC-013) | Fixed in `docker/nginx.conf`: `location ^~ /uploads/` now appears before the static-assets regex block |
 | `VITE_GEMINI_API_KEY` not working | Key not set at build time | Rebuild frontend: `docker compose build frontend` |
 | Port 80 already in use | Another service on the host | Set `HTTP_PORT=8080` in `docker/.env` |
+| HTTPS not working after nginx.conf edit | `nginx.conf` is baked into the image — server runs old image (RC-014) | Rebuild and push: `.\docker\push.ps1`, then `docker compose pull && docker compose up -d` on server |
+| Frontend keeps restarting, cert file not found | Cert not generated on server before starting containers (RC-015) | Run `openssl` command to generate `/etc/ssl/astra/fullchain.pem` and `privkey.pem` first |
+| Frontend keeps restarting, permission denied on privkey | `openssl` creates `privkey.pem` as `600` (root only) — nginx can't read it (RC-016) | `sudo chmod 644 /etc/ssl/astra/privkey.pem` |
+| `https://<ip>:5234` refused after enabling HTTPS | `HTTP_PORT=5234` maps to container port 80, not 443 (RC-017) | Set `HTTPS_PORT=5234` and `HTTP_PORT=5235` in `~/astra-docs/.env` |
+| Cert exists on host but nginx still can't find it | Server `docker-compose.yml` is an old copy without the ssl volume mount (RC-018) | Add `- /etc/ssl/astra:/etc/ssl/astra:ro` under `frontend: volumes:` in `~/astra-docs/docker-compose.yml` |

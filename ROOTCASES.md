@@ -279,3 +279,127 @@ regex location and prevents further regex matching once it matches, so all
 **File:** `docker/nginx.conf`
 
 ---
+
+## RC-014 — HTTPS not working: nginx.conf changes not reflected in running container
+
+**Symptom:** After updating `docker/nginx.conf` to add HTTPS (port 443), the
+server still served HTTP only and `https://` connections were refused.
+
+**Root cause:** `nginx.conf` is **baked into the Docker image** at build time via
+`COPY docker/nginx.conf /etc/nginx/conf.d/default.conf` in `Dockerfile.frontend`.
+The server was running the old image pulled from Docker Hub — which still had the
+HTTP-only config. `docker compose up -d` on the server does not rebuild images;
+it only recreates containers from whatever image is locally cached.
+
+**Fix:** Rebuild and push the frontend image from the dev machine after any
+`nginx.conf` change:
+```powershell
+.\docker\push.ps1
+```
+Then on the server:
+```bash
+docker compose pull && docker compose up -d
+```
+
+**Files:** `docker/Dockerfile.frontend`, `docker/nginx.conf`
+
+---
+
+## RC-015 — HTTPS container crash: SSL certificate files not found
+
+**Symptom:** Frontend container kept restarting with:
+`nginx: cannot load certificate "/etc/ssl/astra/fullchain.pem": No such file or directory`
+
+**Root cause:** The `openssl` command to generate the self-signed certificate had
+not been run on the server before starting the containers. The volume mount
+`/etc/ssl/astra:/etc/ssl/astra:ro` in `docker-compose.yml` mounted an empty (or
+non-existent) directory into the container, so nginx found no cert files and
+crashed on startup.
+
+**Fix:** Generate the self-signed certificate on the server first, then start containers:
+```bash
+sudo mkdir -p /etc/ssl/astra
+sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+  -keyout /etc/ssl/astra/privkey.pem \
+  -out /etc/ssl/astra/fullchain.pem \
+  -subj "/CN=172.31.14.92" \
+  -addext "subjectAltName=IP:172.31.14.92"
+sudo chmod 644 /etc/ssl/astra/privkey.pem
+docker compose up -d
+```
+
+**File:** `docker/docker-compose.release.yml`
+
+---
+
+## RC-016 — HTTPS container crash: privkey.pem not readable by nginx
+
+**Symptom:** Frontend container restarting even after cert files existed.
+`nginx: cannot load certificate key "/etc/ssl/astra/privkey.pem": Permission denied`
+
+**Root cause:** `openssl` creates `privkey.pem` with permissions `600` (owner
+read/write only, owner = root). The nginx worker process runs as a non-root user
+inside the container and cannot read the file.
+
+**Fix:**
+```bash
+sudo chmod 644 /etc/ssl/astra/privkey.pem
+```
+
+**File:** `/etc/ssl/astra/privkey.pem` (host)
+
+---
+
+## RC-017 — HTTPS accessible but on wrong port (port mapping mismatch)
+
+**Symptom:** After HTTPS was working, `https://172.31.14.92:5234` was still
+refused. HTTP on port 5234 also stopped working.
+
+**Root cause:** `docker-compose.release.yml` maps `${HTTP_PORT:-80}:80` and
+`${HTTPS_PORT:-443}:443`. The server's `.env` had `HTTP_PORT=5234` which mapped
+host `5234` → container `80` (HTTP). After adding HTTPS, port 5234 needed to map
+to container `443` instead, and a separate port needed to map to container `80`
+(for the HTTP→HTTPS redirect).
+
+**Fix:** In `~/astra-docs/.env` on the server:
+```env
+HTTPS_PORT=5234
+HTTP_PORT=5235
+```
+`https://172.31.14.92:5234` now hits container port 443. HTTP on `5235`
+redirects to HTTPS.
+
+**File:** `docker/.env` (server-side)
+
+---
+
+## RC-018 — HTTPS cert mount missing from server-side docker-compose.yml
+
+**Symptom:** Frontend container kept crashing with
+`cannot load certificate "/etc/ssl/astra/fullchain.pem": No such file or directory`
+even though the cert files existed on the host at `/etc/ssl/astra/` and had correct
+permissions (`644`).
+
+**Root cause:** The `docker-compose.yml` on the server (`~/astra-docs/docker-compose.yml`)
+was an older copy of `docker-compose.release.yml` — copied before the
+`/etc/ssl/astra:/etc/ssl/astra:ro` volume mount was added to the frontend service.
+The volume mount was present in the source repo but the server file was never updated.
+Without the mount, the container started with no `/etc/ssl/astra/` directory at all,
+so nginx could not find the cert files regardless of host-side permissions.
+
+**Fix:** Edit `~/astra-docs/docker-compose.yml` on the server and add the volume
+mount to the `frontend` service:
+```yaml
+frontend:
+  volumes:
+    - /etc/ssl/astra:/etc/ssl/astra:ro
+```
+Then `docker compose up -d`.
+
+**Lesson:** After adding volume mounts to `docker-compose.release.yml`, always
+copy the updated file to the server — `docker compose pull` only updates images,
+not the compose file itself.
+
+**File:** `docker/docker-compose.release.yml` (must be re-copied to server after changes)
+
+---
