@@ -10,6 +10,7 @@ import { router as authRouter, initGoogle } from "./routes/auth.js";
 import { router as usersRouter } from "./routes/users.js";
 import { router as knowledgeBaseRouter } from "./routes/knowledgeBase.js";
 import { router as conversationsRouter } from "./routes/conversations.js";
+import { router as mcpRouter }           from "./routes/mcp.js";
 import { initKnowledgeBase } from "./kb.js";
 
 const app = express();
@@ -24,6 +25,7 @@ app.use(authRouter);
 app.use(usersRouter);
 app.use(knowledgeBaseRouter);
 app.use(conversationsRouter);
+app.use(mcpRouter);
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 await initGoogle();
