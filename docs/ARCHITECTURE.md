@@ -114,52 +114,65 @@ User message (text + language)
 
 ## 3. Folder Responsibilities
 
-### `backend/src/ingestion/`
+### `backend/` (root)
+
+| File                  | Responsibility                                           |
+|-----------------------|----------------------------------------------------------|
+| `server.js`           | Express app entry point, middleware setup, route wiring  |
+| `email.js`            | Resend (primary) / SMTP (fallback) email transport       |
+| `kb.js`               | Knowledge base shared helpers                            |
+| `shared.js`           | Cross-module utilities                                   |
+| `mcp-server.js`       | MCP stdio server — connects to production API via HTTP   |
+
+### `backend/ingestion/`
 
 | File                     | Responsibility                                      |
 |--------------------------|-----------------------------------------------------|
-| `extractor.ts`           | PDF / MD / DOCX text extraction                     |
-| `chunker.ts`             | 500-word sliding window, IMAGE_REF preservation     |
-| `image_resolver.ts`      | Resolve IMAGE_REF tokens → disk + public URL        |
-| `enricher.ts`            | Gemini enrichment call, entity/relation extraction  |
-| `embedder.ts`            | Gemini embedding call, retry logic                  |
-| `pipeline.ts`            | Orchestrates steps 1–8, handles errors per doc      |
-| `batch_processor.ts`     | ZIP extraction, SSE emission, parallel file loop    |
+| `extractor.js`           | PDF / MD / DOCX text extraction + graphviz pre-pass |
+| `chunker.js`             | 500-word sliding window, IMAGE_REF preservation     |
+| `image_resolver.js`      | Resolve IMAGE_REF tokens → disk + public URL        |
+| `graphviz_renderer.js`   | Render ```graphviz blocks to SVG via @hpcc-js/wasm  |
+| `enricher.js`            | Gemini enrichment call, entity/relation extraction  |
+| `embedder.js`            | Gemini embedding call, retry logic                  |
+| `pipeline.js`            | Orchestrates steps 1–8, handles errors per doc      |
 
-### `backend/src/retrieval/`
-
-| File                     | Responsibility                                      |
-|--------------------------|-----------------------------------------------------|
-| `strategies.ts`          | 4 retrieval functions (chunk, entity, graph, seq)   |
-| `merger.ts`              | Deduplicate + score merge across strategies         |
-| `expander.ts`            | Sequential neighbor expansion                       |
-| `translator.ts`          | Auto-translate chunks via Gemini                    |
-| `query_pipeline.ts`      | Orchestrates query steps 1–10                       |
-
-### `backend/src/graph/`
+### `backend/retrieval/`
 
 | File                     | Responsibility                                      |
 |--------------------------|-----------------------------------------------------|
-| `driver.ts`              | Neo4j driver singleton                              |
-| `schema.ts`              | Index creation, constraint creation on startup      |
-| `queries/`               | One file per domain (document, chunk, entity)       |
+| `strategies.js`          | 4 retrieval functions (chunk, entity, graph, seq)   |
+| `merger.js`              | Deduplicate + score merge across strategies         |
+| `expander.js`            | Sequential neighbor expansion                       |
+| `translator.js`          | Auto-translate chunks via Gemini                    |
+| `query_pipeline.js`      | Orchestrates query steps 1–10                       |
 
-### `backend/src/llm/`
-
-| File                     | Responsibility                                      |
-|--------------------------|-----------------------------------------------------|
-| `gemini_client.ts`       | Singleton, all Gemini calls go through here         |
-| `prompts.ts`             | All prompt templates as typed constants             |
-
-### `backend/src/routes/`
+### `backend/graph/`
 
 | File                     | Responsibility                                      |
 |--------------------------|-----------------------------------------------------|
-| `knowledge_base.ts`      | Upload, batch, reset, SSE progress                  |
-| `chat.ts`                | Query pipeline, message persistence                 |
-| `projects.ts`            | Project CRUD                                        |
-| `auth.ts`                | Login, logout, OAuth callback, LDAP                 |
-| `users.ts`               | Admin: list, approve, deny                          |
+| `driver.js`              | Neo4j driver singleton                              |
+| `schema.js`              | Index creation, constraint creation on startup      |
+| `queries/document.js`    | Cypher queries for KBDocument nodes                 |
+| `queries/chunk.js`       | Cypher queries for KBChunk nodes                    |
+| `queries/entity.js`      | Cypher queries for KBEntity nodes                   |
+
+### `backend/routes/`
+
+| File                     | Responsibility                                      |
+|--------------------------|-----------------------------------------------------|
+| `knowledgeBase.js`       | Upload, batch, reset, SSE progress                  |
+| `conversations.js`       | Chat + message + project CRUD                       |
+| `auth.js`                | Login, logout, OAuth callback, LDAP                 |
+| `users.js`               | Admin: list, approve, deny                          |
+| `mcp.js`                 | Token-protected /api/mcp/* endpoints                |
+| `presentations.js`       | Presentation management                             |
+
+### `backend/utils/`
+
+| File          | Responsibility                             |
+|---------------|--------------------------------------------|
+| `config.js`   | All env var reads, typed config object     |
+| `logger.js`   | Structured logger (console + file)         |
 
 ---
 

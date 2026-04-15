@@ -41,7 +41,7 @@ Then read any `SPEC.md` file inside the feature folder you are about to touch.
 | Frontend        | React 19, Vite, TypeScript, Tailwind CSS 4  |
 | Animations      | Framer Motion                               |
 | Icons           | Lucide React                                |
-| Backend         | Node.js + Express (TypeScript)              |
+| Backend         | Node.js + Express (JavaScript ES modules)   |
 | LLM             | Google Gemini 2.0 Flash                     |
 | Embeddings      | `gemini-embedding-001` (3072 dims)          |
 | Graph/Vector DB | Neo4j 5.x                                   |
@@ -57,32 +57,92 @@ necessary and why the existing stack cannot satisfy the requirement.
 
 ```
 astra-docs/
-├── CLAUDE.md                   ← you are here
-├── PLANS.md                    ← product roadmap (read-only reference)
-├── docs/                       ← Claude Code specification files
+├── CLAUDE.md                        ← you are here
+├── PLANS.md                         ← product roadmap (read-only reference)
+├── DEPLOYMENT.md                    ← Docker + HTTPS deployment guide
+├── MCP.md                           ← Claude Code MCP integration guide
+├── ROOTCASES.md                     ← known issues & root causes log
+├── .mcp.json                        ← MCP server config (Claude Code)
+├── plans/                           ← feature planning documents
+│   ├── Initial developement plan.md
+│   └── Dépasser Karpathy LLM-wiki.md
+├── docs/                            ← specification files
 │   ├── ARCHITECTURE.md
 │   ├── RAG_PIPELINE.md
 │   ├── NEO4J_SCHEMA.md
 │   ├── API_CONTRACTS.md
-│   └── CODING_STANDARDS.md
+│   ├── CODING_STANDARDS.md
+│   └── QUICK_REFERENCE.md
 ├── backend/
+│   ├── server.js                    ← Express app entry point
+│   ├── email.js                     ← Resend / SMTP email transport
+│   ├── kb.js                        ← knowledge base helpers
+│   ├── shared.js                    ← shared utilities
+│   ├── mcp-server.js                ← MCP stdio server (for Claude Code)
+│   ├── ingestion/                   ← document parsing, chunking, enrichment, embedding
+│   │   ├── extractor.js
+│   │   ├── chunker.js
+│   │   ├── image_resolver.js
+│   │   ├── graphviz_renderer.js
+│   │   ├── enricher.js
+│   │   ├── embedder.js
+│   │   └── pipeline.js
+│   ├── retrieval/                   ← query pipeline, ranking, graph expansion
+│   │   ├── strategies.js
+│   │   ├── merger.js
+│   │   ├── expander.js
+│   │   ├── translator.js
+│   │   └── query_pipeline.js
+│   ├── graph/                       ← Neo4j driver, Cypher queries, schema
+│   │   ├── driver.js
+│   │   ├── schema.js
+│   │   └── queries/
+│   │       ├── document.js
+│   │       ├── chunk.js
+│   │       └── entity.js
+│   ├── routes/                      ← Express routers
+│   │   ├── auth.js
+│   │   ├── knowledgeBase.js
+│   │   ├── conversations.js
+│   │   ├── users.js
+│   │   ├── mcp.js                   ← token-protected /api/mcp/* endpoints
+│   │   └── presentations.js
+│   └── utils/
+│       ├── config.js
+│       └── logger.js
+├── frontend/
 │   ├── src/
-│   │   ├── ingestion/          ← document parsing, chunking, enrichment, embedding
-│   │   ├── retrieval/          ← query pipeline, ranking, graph expansion
-│   │   ├── graph/              ← Neo4j driver, Cypher queries, schema helpers
-│   │   ├── llm/                ← Gemini client wrappers
-│   │   ├── routes/             ← Express routers
-│   │   ├── middleware/         ← auth, error, rate-limit
-│   │   ├── db/                 ← SQLite schema + helpers
-│   │   └── utils/              ← shared helpers
-│   ├── uploads/
-│   │   └── kb-images/          ← <docId>/<relative-path> image storage
-│   └── tests/
-└── frontend/
-    └── src/
-        ├── components/
-        ├── hooks/
-        └── pages/
+│   │   ├── App.tsx
+│   │   ├── types.ts
+│   │   ├── constants.ts
+│   │   ├── utils.ts
+│   │   ├── components/
+│   │   │   ├── admin/               ← ValidationDialog
+│   │   │   ├── auth/                ← AuthDialog
+│   │   │   ├── chat/                ← ChatPanel
+│   │   │   ├── knowledge-base/      ← AddPdfDialog
+│   │   │   └── ui/                  ← Card, TopSelect
+│   │   ├── hooks/
+│   │   │   └── useSpeechRecognition.ts
+│   │   └── services/
+│   │       └── gemini.ts            ← Gemini chat API (frontend direct call)
+│   └── static/                      ← logo, icon assets
+├── docker/
+│   ├── Dockerfile.backend
+│   ├── Dockerfile.frontend
+│   ├── nginx.conf                   ← HTTPS + reverse proxy config
+│   ├── docker-compose.yml
+│   ├── docker-compose.release.yml   ← production (HTTPS ports, cert volume)
+│   ├── push.ps1 / push.sh
+│   ├── export.ps1 / export.sh
+│   ├── install.sh
+│   └── data/
+│       └── backend.env.example      ← all runtime secrets template
+├── tests/
+│   ├── graphviz_renderer.test.js
+│   └── retrieval.test.js
+└── uploads/
+    └── kb-images/                   ← <docId>/<relative-path> image storage
 ```
 
 ---
@@ -115,13 +175,20 @@ Log the error, emit a `file_error` SSE event, and continue to the next file.
 ### 5.5 Secrets
 
 All credentials live in `.env`. Never hardcode API keys, passwords, or connection
-strings. Use the `config` module at `backend/src/utils/config.ts`.
+strings. Use the `config` module at `backend/utils/config.js`.
 
 ---
 
 ## 6. Environment Variables
 
+All env vars live in `backend/.env` (dev) or `docker/data/backend.env` (production).
+See `docker/data/backend.env.example` for the full template.
+
 ```env
+PORT=3001
+FRONTEND_ORIGIN=http://localhost:5173
+APP_BASE_URL=http://localhost:5173
+
 # Neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -130,28 +197,35 @@ NEO4J_PASSWORD=
 # Google Gemini
 GEMINI_API_KEY=
 
-# SQLite
-SQLITE_PATH=./data/astra.db
+# Cookie
+COOKIE_NAME=astra_session
+COOKIE_SECURE=false
+COOKIE_SAMESITE=lax
 
-# Auth
-SESSION_SECRET=
+# Email — Resend (primary) or SMTP (fallback)
+RESEND_API_KEY=
+RESEND_FROM="HORIBA Astra Knowledge System" <do_not_reply@horiba.com>
+# SMTP_HOST=  SMTP_PORT=587  SMTP_USER=  SMTP_PASS=  SMTP_FROM=
+
+# MCP (Claude Code integration)
+MCP_SECRET=
+
+# LDAP / Active Directory
+LDAP_ENABLED=false
+LDAP_URL=ldaps://HFRDC01.jy.fr
+LDAP_DOMAIN=jy.fr
+LDAP_BASE_DN=DC=jy,DC=fr
+LDAP_SEARCH_ATTR=sAMAccountName
+
+# Google OAuth
+GOOGLE_OAUTH_ENABLED=false
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-LDAP_URL=
-LDAP_BASE_DN=
-LDAP_BIND_DN=
-LDAP_BIND_PASSWORD=
+GOOGLE_REDIRECT_URI=http://localhost:3001/auth/google/callback
 
-# SMTP
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASSWORD=
-SMTP_FROM="HORIBA Astra Knowledge System"
-
-# Server
-PORT=3001
-FRONTEND_URL=http://localhost:5173
+# SVG diagram sizing
+SVG_MAX_WIDTH=800
+SVG_MAX_HEIGHT=600
 ```
 
 ---
