@@ -403,3 +403,37 @@ not the compose file itself.
 **File:** `docker/docker-compose.release.yml` (must be re-copied to server after changes)
 
 ---
+
+## RC-019 — Batch SSE stream lost on large ZIP archives (200+ files)
+
+**Symptom:** The "Batch processing" tab showed "Connection to progress stream lost."
+partway through a large ZIP upload. Some files were processed successfully
+(visible in the progress log) but the job stopped and the rest of the archive
+was not ingested.
+
+**Root cause (primary — idle timeout):** The SSE progress stream passes through
+nginx, which has `proxy_read_timeout 300 s`. Each file emits two events
+(`processing` and `file_done`). If enrichment + embedding for a single file
+takes longer than 300 s — which can happen under Gemini API rate limiting or for
+dense documents — no bytes are sent on the wire and nginx silently closes the
+connection. The browser `EventSource` fires `onerror`, and the old frontend code
+immediately called `es.close()` and showed the error message.
+
+**Root cause (secondary — no reconnect):** The backend already queued SSE events
+while no client was connected (`_sseEmit → job.queue`), so a reconnect would
+receive all missed events. But the frontend never attempted a reconnect.
+
+**Fix:**
+1. **Backend heartbeat** — `GET /api/knowledge-base/batch-progress/:jobId` now
+   sends an SSE comment (`": ping\n\n"`) every 15 s while the job is running.
+   This keeps the nginx `proxy_read_timeout` timer from expiring between file events.
+2. **Frontend auto-reconnect** — `onerror` now schedules a silent reconnect after
+   3 s (up to 30 retries / ~90 s total) instead of immediately showing an error.
+   A `seen` Set deduplicates `file_done` and `file_error` events across reconnects.
+3. **Longer job TTL** — job cleanup delay extended from 30 s to 10 min so that
+   a brief network drop doesn't destroy the job before the client can reconnect.
+
+**Files:** `backend/routes/knowledgeBase.js`,
+`frontend/src/components/knowledge-base/AddPdfDialog.tsx`
+
+---

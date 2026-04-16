@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, CheckCircle, XCircle } from "lucide-react";
+import { X, CheckCircle, XCircle, ShieldCheck, BookOpen } from "lucide-react";
 
 interface PendingUser {
   id: string;
@@ -37,6 +37,38 @@ export function ValidationDialog({
   }
 
   useEffect(() => { if (open) load(); }, [open]);
+
+  async function approveAsContributor(user: PendingUser) {
+    setProcessing(user.id);
+    try {
+      await fetch(`/api/users/${user.id}/approve`, { method: "POST", credentials: "include" });
+      await fetch(`/api/users/${user.id}/role`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "contributor" }),
+      });
+      const updated = users.filter((u) => u.id !== user.id);
+      setUsers(updated);
+      onCountChange(updated.length);
+    } catch {}
+    finally { setProcessing(null); }
+  }
+
+  async function approveAsAdmin(user: PendingUser) {
+    setProcessing(user.id);
+    try {
+      await fetch(`/api/users/${user.id}/approve`, { method: "POST", credentials: "include" });
+      await fetch(`/api/users/${user.id}/role`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "admin" }),
+      });
+      const updated = users.filter((u) => u.id !== user.id);
+      setUsers(updated);
+      onCountChange(updated.length);
+    } catch {}
+    finally { setProcessing(null); }
+  }
 
   async function approve(user: PendingUser) {
     setProcessing(user.id);
@@ -108,6 +140,26 @@ export function ValidationDialog({
                       >
                         <CheckCircle className="h-4 w-4" />
                         Grant
+                      </button>
+                      <button
+                        className="validationBtn validationBtnGrant"
+                        style={{ opacity: 0.8 }}
+                        disabled={processing === user.id}
+                        onClick={() => approveAsContributor(user)}
+                        title="Grant access as contributor (knowledge base management)"
+                      >
+                        <BookOpen className="h-4 w-4" />
+                        Contrib
+                      </button>
+                      <button
+                        className="validationBtn validationBtnGrant"
+                        style={{ opacity: 0.8 }}
+                        disabled={processing === user.id}
+                        onClick={() => approveAsAdmin(user)}
+                        title="Grant access as admin"
+                      >
+                        <ShieldCheck className="h-4 w-4" />
+                        Admin
                       </button>
                       <button
                         className="validationBtn validationBtnDeny"

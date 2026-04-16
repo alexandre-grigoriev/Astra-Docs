@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Mail, Eye, EyeOff } from "lucide-react";
+import { X, Mail, Eye, EyeOff, CheckCircle } from "lucide-react";
 
-type AuthScreen = "signin" | "register" | "inbox" | "ldap";
+type AuthScreen = "signin" | "register" | "inbox" | "ldap" | "ldap_pending";
 
 function PasswordInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
   const [show, setShow] = useState(false);
@@ -76,6 +76,7 @@ export function AuthDialog({ open, onBeginOAuth, onSuccess, onClose }: {
       const res  = await fetch("/api/auth/ldap", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: ldapUser.trim(), password }) });
       const data = await res.json();
       if (res.ok) onSuccess();
+      else if (data.code === "ldap_pending") setScreen("ldap_pending");
       else setError(data.error || "Authentication failed");
     } catch { setError("Network error. Please try again."); }
     finally { setLoading(false); }
@@ -154,12 +155,24 @@ export function AuthDialog({ open, onBeginOAuth, onSuccess, onClose }: {
               {screen === "ldap" && (
                 <form onSubmit={handleLdapLogin}>
                   <div className="authHeader"><div className="authTitle">Windows account</div><div className="authSubtitle">Sign in with your HORIBA credentials</div></div>
-                  <div className="authField"><div className="authLabel">Username</div><input className="authInput" type="text" value={ldapUser} onChange={e => setLdapUser(e.target.value)} placeholder="firstname.lastname" required autoFocus autoComplete="username" /></div>
+                  <div className="authField"><div className="authLabel">Username</div><input className="authInput" type="text" value={ldapUser} onChange={e => setLdapUser(e.target.value)} placeholder="username" required autoFocus autoComplete="username" /></div>
                   <div className="authField"><div className="authLabel">Password</div><PasswordInput value={password} onChange={setPassword} placeholder="Windows password" /></div>
                   {error && <div className="authError">{error}</div>}
                   <button className="authContinue" type="submit" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
                   <div className="authFooter"><button type="button" className="authLink" onClick={() => { setScreen("signin"); setError(""); }}>Other sign-in options</button></div>
                 </form>
+              )}
+
+              {screen === "ldap_pending" && (
+                <div className="authInbox">
+                  <div className="authInboxIcon"><CheckCircle className="h-8 w-8" style={{ color: "#1677ff" }} /></div>
+                  <div className="authTitle" style={{ marginTop: 16 }}>Request submitted</div>
+                  <p className="authSubtitle" style={{ marginTop: 8 }}>Your HORIBA account has been verified.<br />An <strong>access request</strong> has been sent to the administrator.</p>
+                  <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 16, lineHeight: 1.6, textAlign: "center" }}>You will receive an email notification once your account is approved.</p>
+                  <div className="authFooter" style={{ marginTop: 24 }}>
+                    <button type="button" className="authLink" onClick={() => { setScreen("ldap"); setError(""); setPassword(""); }}>Back</button>
+                  </div>
+                </div>
               )}
 
               {screen === "inbox" && (

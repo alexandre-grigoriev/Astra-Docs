@@ -57,8 +57,8 @@ for (const col of [
   try { db.exec(col); } catch { /* column already exists */ }
 }
 
-// Ensure LDAP / Google / seed accounts are always approved
-db.exec("UPDATE users SET status='approved' WHERE provider IN ('google','ldap','seed') AND status != 'approved'");
+// Ensure Google / seed accounts are always approved (LDAP users go through pending flow)
+db.exec("UPDATE users SET status='approved' WHERE provider IN ('google','seed') AND status != 'approved'");
 
 db.exec("UPDATE users SET verified = 1 WHERE provider = 'google' AND verified = 0");
 
@@ -97,7 +97,8 @@ db.prepare(`
 export const stmtFindById    = db.prepare("SELECT * FROM users WHERE id = ?");
 export const stmtFindByEmail = db.prepare("SELECT * FROM users WHERE email = ?");
 export const stmtFindByToken = db.prepare("SELECT * FROM users WHERE verify_token = ?");
-export const stmtAllUsers    = db.prepare("SELECT id, email, name, picture, role, provider, verified, created_at, last_login FROM users ORDER BY created_at");
+export const stmtAllUsers    = db.prepare("SELECT id, email, name, picture, role, provider, verified, status, created_at, last_login FROM users ORDER BY created_at");
+export const stmtAllAdmins   = db.prepare("SELECT email, name FROM users WHERE role = 'admin' AND status = 'approved'");
 export const stmtUpdateRole  = db.prepare("UPDATE users SET role = ? WHERE id = ?");
 export const stmtGoogleUpsert = db.prepare(`
   INSERT INTO users (id, email, name, picture, provider, verified, last_login)
@@ -109,8 +110,8 @@ export const stmtGoogleUpsert = db.prepare(`
 `);
 
 export const stmtLdapUpsert = db.prepare(`
-  INSERT INTO users (id, email, name, provider, verified, last_login)
-  VALUES (?, ?, ?, 'ldap', 1, datetime('now'))
+  INSERT INTO users (id, email, name, provider, verified, status, last_login)
+  VALUES (?, ?, ?, 'ldap', 1, 'pending', datetime('now'))
   ON CONFLICT(id) DO UPDATE SET
     name       = excluded.name,
     last_login = excluded.last_login

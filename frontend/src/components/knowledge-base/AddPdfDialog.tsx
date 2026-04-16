@@ -130,43 +130,59 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
       return;
     }
 
-    // 2. Connect to SSE progress stream
-    const es = new EventSource(`/api/knowledge-base/batch-progress/${jobId}`);
+    // 2. Connect to SSE progress stream with auto-reconnect
+    // The backend queues events while disconnected, so reconnecting replays only missed events.
+    // A deduplication set prevents the same file appearing twice across reconnects.
+    const seen = new Set<string>();
+    let reconnects = 0;
+    const MAX_RECONNECTS = 30; // ~90 s of retries before giving up
 
-    es.addEventListener("processing", (e) => {
-      const { filename } = JSON.parse(e.data);
-      setCurrentFile(filename);
-    });
+    function connectSSE() {
+      const es = new EventSource(`/api/knowledge-base/batch-progress/${jobId}`);
 
-    es.addEventListener("file_done", (e) => {
-      const { filename, chunkCount } = JSON.parse(e.data);
-      setCurrentFile(null);
-      setProgress(prev => [...prev, { filename, chunkCount, ok: true }]);
-      loadDocs();
-    });
+      es.addEventListener("processing", (e) => {
+        const { filename } = JSON.parse(e.data);
+        setCurrentFile(filename);
+      });
 
-    es.addEventListener("file_error", (e) => {
-      const { filename, error } = JSON.parse(e.data);
-      setCurrentFile(null);
-      setProgress(prev => [...prev, { filename, error, ok: false }]);
-    });
+      es.addEventListener("file_done", (e) => {
+        const { filename, chunkCount } = JSON.parse(e.data);
+        setCurrentFile(null);
+        const key = `done::${filename}`;
+        if (!seen.has(key)) { seen.add(key); setProgress(prev => [...prev, { filename, chunkCount, ok: true }]); loadDocs(); }
+      });
 
-    es.addEventListener("done", () => {
-      es.close();
-      setBatchRunning(false);
-      setBatchDone(true);
-      setCurrentFile(null);
-      setBatchFile(null);
-      if (batchInputRef.current) batchInputRef.current.value = "";
-      loadDocs();
-    });
+      es.addEventListener("file_error", (e) => {
+        const { filename, error } = JSON.parse(e.data);
+        setCurrentFile(null);
+        const key = `err::${filename}`;
+        if (!seen.has(key)) { seen.add(key); setProgress(prev => [...prev, { filename, error, ok: false }]); }
+      });
 
-    es.onerror = () => {
-      es.close();
-      setBatchRunning(false);
-      setCurrentFile(null);
-      setError("Connection to progress stream lost.");
-    };
+      es.addEventListener("done", () => {
+        es.close();
+        setBatchRunning(false);
+        setBatchDone(true);
+        setCurrentFile(null);
+        setBatchFile(null);
+        if (batchInputRef.current) batchInputRef.current.value = "";
+        loadDocs();
+      });
+
+      es.onerror = () => {
+        es.close();
+        setCurrentFile(null);
+        if (reconnects < MAX_RECONNECTS) {
+          reconnects++;
+          setTimeout(connectSSE, 3_000); // silent reconnect — job still running on server
+        } else {
+          setBatchRunning(false);
+          setError("Connection lost after multiple retries. Check the Documents tab for partial results.");
+        }
+      };
+    }
+
+    connectSSE();
   }
 
   // ── Expand / preview ────────────────────────────────────────────────────────

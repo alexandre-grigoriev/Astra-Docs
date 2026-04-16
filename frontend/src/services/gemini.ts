@@ -7,6 +7,18 @@ export interface ChatMessage {
   text: string;
 }
 
+/**
+ * Rough token estimate for the current chat context.
+ * Uses the ~4 chars/token heuristic plus a fixed overhead for the system
+ * prompt and KB context (which vary per query but average ~2 000 tokens).
+ */
+export function estimateTokens(history: ChatMessage[], pendingInput = ""): number {
+  const SYSTEM_OVERHEAD = 2_000; // system prompt + average KB context
+  const historyChars = history.reduce((sum, m) => sum + m.text.length, 0);
+  const inputChars   = pendingInput.length;
+  return SYSTEM_OVERHEAD + Math.ceil((historyChars + inputChars) / 4);
+}
+
 interface KBSource { filename: string; documentDate: string | null; }
 
 async function callGemini(prompt: string): Promise<string> {

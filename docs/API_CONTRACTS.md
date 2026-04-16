@@ -1,16 +1,203 @@
 # API_CONTRACTS.md — REST Endpoint Specifications
 
 > The frontend is already built against these contracts.
-> Do not change response shapes. Adding new optional fields is allowed.
+> Do not change response shapes without updating the frontend.
+> Adding new optional fields is safe. Removing or renaming fields is forbidden.
 > All endpoints return `Content-Type: application/json` unless noted.
 
 ---
 
-## Authentication
+## Roles & Access Control
+
+| Role          | Access                                                           |
+|---------------|------------------------------------------------------------------|
+| `user`        | Chat, read documents, read KB stats                              |
+| `contributor` | All user rights + upload, delete, and update knowledge base docs |
+| `admin`       | All contributor rights + user management, KB reset              |
 
 All endpoints except `/api/auth/*` require a valid session cookie.
-Unauthenticated requests return `401 { error: 'Unauthorized' }`.
-Admin-only endpoints return `403 { error: 'Forbidden' }` for non-admin users.
+Unauthenticated requests return `401`.
+Insufficient role returns `403`.
+
+---
+
+## Auth Routes (`/api/auth`)
+
+### POST `/api/auth/register`
+
+Register with email + password. Sends a verification email.
+
+**Request body:**
+```json
+{ "name": "Jane Doe", "email": "jane@example.com", "password": "mypassword" }
+```
+
+**Response `200`:** `{ "ok": true }`
+**Response `409`:** `{ "error": "An account with this email already exists" }`
+
+---
+
+### GET `/api/auth/verify`
+
+Email verification link (sent by email). Redirects to the frontend with `?pending=1`.
+
+**Query params:** `?token=<token>`
+
+---
+
+### POST `/api/auth/login`
+
+Email + password login.
+
+**Request body:** `{ "email": "...", "password": "..." }`
+
+**Response `200`:** `{ "ok": true }` + sets session cookie
+**Response `401`:** `{ "error": "Invalid email or password" }`
+**Response `403`:** `{ "error": "...", "code": "pending_approval" | "rejected" | "unverified" }`
+
+---
+
+### POST `/api/auth/ldap`
+
+HORIBA Windows account (Active Directory) login.
+
+**Request body:** `{ "username": "grigoriev", "password": "..." }`
+
+| Scenario | Status | Response |
+|----------|--------|----------|
+| Credentials invalid | `401` | `{ "error": "Invalid Windows username or password" }` |
+| First login — request created | `403` | `{ "ok": false, "code": "ldap_pending" }` — admin notified by email |
+| Returning user, still pending | `403` | `{ "error": "...", "code": "pending_approval" }` |
+| Returning user, rejected | `403` | `{ "error": "...", "code": "rejected" }` |
+| Returning user, approved | `200` | `{ "ok": true }` + sets session cookie |
+| LDAP disabled | `503` | `{ "error": "LDAP authentication is not enabled" }` |
+
+On first login the backend:
+1. Creates a `users` row with `status='pending'`
+2. Emails every admin (`role='admin'`) with a notification
+3. Returns `403 ldap_pending` so the frontend shows the "Request submitted" screen
+
+---
+
+### GET `/auth/google/login`
+
+Initiates Google OAuth flow. Redirects to Google.
+
+**Query params:** `?returnTo=<url>` (must start with `FRONTEND_ORIGIN`)
+
+---
+
+### GET `/auth/google/callback`
+
+Google OAuth callback. Sets session cookie and redirects to `returnTo`.
+
+---
+
+### POST `/api/auth/logout`
+
+Destroys the session.
+
+**Response `204`**
+
+---
+
+### POST `/api/auth/resend-verification`
+
+Resend email verification link.
+
+**Request body:** `{ "email": "jane@example.com" }`
+
+**Response `200`:** `{ "ok": true }` (always, to avoid user enumeration)
+
+---
+
+### GET `/api/auth/me`
+
+Returns the currently authenticated user.
+
+**Response `200`:**
+```json
+{
+  "id": "ldap-grigoriev",
+  "name": "Alexandre Grigoriev",
+  "email": "alexandre.grigoriev@horiba.com",
+  "picture": null,
+  "role": "admin",
+  "provider": "ldap"
+}
+```
+
+**Response `401`** when not authenticated.
+
+---
+
+## User Management Routes (`/api/users`) — Admin only
+
+### GET `/api/users`
+
+All users with full metadata.
+
+**Response `200`** — array:
+```json
+[
+  {
+    "id": "ldap-grigoriev",
+    "email": "alexandre.grigoriev@horiba.com",
+    "name": "Alexandre Grigoriev",
+    "picture": null,
+    "role": "admin",
+    "provider": "ldap",
+    "verified": 1,
+    "status": "approved",
+    "created_at": "2026-04-16T09:00:00.000Z",
+    "last_login": "2026-04-16T10:30:00.000Z"
+  }
+]
+```
+
+---
+
+### GET `/api/users/pending`
+
+Users with `status='pending'` waiting for admin approval.
+
+**Response `200`** — array:
+```json
+[
+  { "id": "ldap-saad", "email": "yasmine.saad@horiba.com", "name": "Yasmine SAAD",
+    "provider": "ldap", "created_at": "2026-04-16T09:29:56.000Z" }
+]
+```
+
+---
+
+### PUT `/api/users/:id/role`
+
+Change a user's role.
+
+**Request body:** `{ "role": "admin" | "contributor" | "user" }`
+
+**Response `200`:** `{ "ok": true }`
+**Response `400`:** `{ "error": "Invalid role. Must be admin | contributor | user" }`
+**Response `404`:** `{ "error": "User not found" }`
+
+Note: live sessions are updated in-memory immediately — no re-login required.
+
+---
+
+### POST `/api/users/:id/approve`
+
+Approve a pending user. Sets `status='approved'` and sends an approval email.
+
+**Response `200`:** `{ "ok": true }`
+
+---
+
+### POST `/api/users/:id/reject`
+
+Reject and delete a pending user. Sends a rejection email.
+
+**Response `200`:** `{ "ok": true }`
 
 ---
 
@@ -18,51 +205,44 @@ Admin-only endpoints return `403 { error: 'Forbidden' }` for non-admin users.
 
 ### POST `/api/knowledge-base/upload`
 
-Upload a single document. Admin only.
+Upload a single document. **Contributor or Admin.**
 
 **Request:** `multipart/form-data`
-| Field          | Type   | Required | Notes                          |
-|----------------|--------|----------|--------------------------------|
-| `file`         | File   | Yes      | PDF, MD, or DOCX; max 50 MB   |
-| `documentDate` | String | No       | ISO 8601 date string           |
+| Field          | Type   | Required | Notes                        |
+|----------------|--------|----------|------------------------------|
+| `file`         | File   | Yes      | PDF, MD, or DOCX; max 50 MB |
+| `documentDate` | String | No       | ISO 8601 date `YYYY-MM-DD`  |
 
 **Response `200`:**
 ```json
-{
-  "docId": "abc123",
-  "filename": "installation-guide.pdf",
-  "chunksWritten": 12,
-  "entitiesWritten": 34
-}
+{ "docId": "abc123", "filename": "guide.pdf", "chunkCount": 12 }
 ```
-
-**Response `400`:** `{ "error": "Unsupported file type" }`
-**Response `413`:** `{ "error": "File too large" }`
 
 ---
 
 ### POST `/api/knowledge-base/upload-batch`
 
-Upload a ZIP archive for batch processing. Admin only.
-Returns immediately; processing continues asynchronously.
+Upload a ZIP archive for batch ingestion. **Contributor or Admin.**
+Returns immediately with a `jobId`; processing continues asynchronously.
 
 **Request:** `multipart/form-data`
-| Field  | Type | Required | Notes              |
-|--------|------|----------|--------------------|
-| `file` | File | Yes      | ZIP; max 200 MB    |
+| Field   | Type | Required | Notes           |
+|---------|------|----------|-----------------|
+| `files` | File | Yes      | ZIP; max 200 MB |
 
-**Response `200`:**
-```json
-{ "jobId": "job_xyz789" }
-```
+**Response `200`:** `{ "jobId": "uuid-..." }`
 
 ---
 
 ### GET `/api/knowledge-base/batch-progress/:jobId`
 
-SSE stream for batch job progress. Admin only.
+SSE stream for batch job progress. **Contributor or Admin.**
 
 **Response:** `Content-Type: text/event-stream`
+
+A `: ping` comment is sent every 15 s to keep the connection alive through proxies.
+The backend queues events while no client is connected; reconnecting replays all
+missed events (supporting transparent auto-reconnect).
 
 Event formats:
 ```
@@ -70,31 +250,33 @@ event: processing
 data: {"filename":"guide.pdf"}
 
 event: file_done
-data: {"filename":"guide.pdf","chunks":12}
+data: {"filename":"guide.pdf","chunkCount":12}
 
 event: file_error
 data: {"filename":"broken.pdf","error":"Failed to parse PDF"}
 
 event: done
-data: {"total":5,"success":4,"failed":1}
+data: {}
 ```
+
+Job record is kept for 10 min after completion to allow late reconnects.
 
 ---
 
 ### GET `/api/knowledge-base/documents`
 
-List all ingested documents. Authenticated users only.
+List all ingested documents. **Any authenticated user.**
 
-**Response `200`** — flat array:
+**Response `200`** — array:
 ```json
 [
   {
     "id": "abc123",
-    "filename": "guide.pdf",
-    "mimeType": "pdf",
+    "filename": "installation-guide.pdf",
+    "filepath": "manuals/installation-guide.pdf",
     "lang": "en",
     "summary": "This guide covers ...",
-    "uploadedAt": "2024-01-15T10:30:00Z",
+    "uploadedAt": "2026-04-15T10:30:00Z",
     "documentDate": "2023-06-01",
     "wordCount": 4500,
     "chunkCount": 12
@@ -104,105 +286,50 @@ List all ingested documents. Authenticated users only.
 
 ---
 
-### DELETE `/api/knowledge-base/documents/:docId`
+### DELETE `/api/knowledge-base/documents/:id`
 
-Delete a document and its chunks. Admin only.
+Delete a document and all its chunks + images. **Contributor or Admin.**
 
-**Response `200`:** `{ "deleted": true }`
-**Response `404`:** `{ "error": "Document not found" }`
-
----
-
-### POST `/api/knowledge-base/reset`
-
-Delete all knowledge base data. Admin only.
-
-**Response `200`:** `{ "reset": true }`
+**Response `200`:** `{ "ok": true }`
 
 ---
 
-### GET `/api/knowledge-base/stats`
+### POST `/api/knowledge-base/documents/:id/update`
 
-Knowledge base statistics. Admin only.
+Replace a document with a new version (re-ingests). **Contributor or Admin.**
 
-**Response `200`:**
-```json
-{
-  "documents": 23,
-  "chunks": 412,
-  "entities": 891,
-  "images": 67
-}
-```
+**Request:** `multipart/form-data` — same fields as single upload.
+
+**Response `200`:** `{ "docId": "...", "filename": "...", "chunkCount": 8 }`
 
 ---
 
-## Chat Routes (`/api/chats`)
+### DELETE `/api/knowledge-base/reset`
 
-### GET `/api/chats/:chatId/messages`
+Delete **all** knowledge base data (documents, chunks, entities, images). **Admin only.**
 
-Retrieve all messages in a chat (ordered by creation time).
-
-**Response `200`:**
-```json
-{
-  "messages": [
-    {
-      "id": "msg_001",
-      "role": "user",
-      "content": "What is the Raman spectrometer calibration procedure?",
-      "createdAt": "2024-01-15T10:31:00Z",
-      "images": []
-    },
-    {
-      "id": "msg_002",
-      "role": "assistant",
-      "content": "The calibration procedure involves...",
-      "createdAt": "2024-01-15T10:31:05Z",
-      "images": ["/uploads/kb-images/abc123/diagrams/calibration.png"]
-    }
-  ]
-}
-```
+**Response `200`:** `{ "ok": true }`
 
 ---
 
-### POST `/api/chats/:chatId/messages`
+### POST `/api/knowledge-base/search`
 
-Send a user message and receive an assistant response.
+Semantic RAG search. **Any authenticated user.**
 
 **Request body:**
 ```json
-{
-  "content": "What is the Raman spectrometer calibration procedure?",
-  "language": "en"
-}
+{ "query": "Raman calibration procedure", "lang": "fr", "topK": 8 }
 ```
-
-| Field      | Type   | Required | Notes                                            |
-|------------|--------|----------|--------------------------------------------------|
-| `content`  | String | Yes      | User's question                                  |
-| `language` | String | Yes      | `en` \| `fr` \| `ar` \| `ja` \| `zh` \| `ru`  |
 
 **Response `200`:**
 ```json
 {
-  "message": {
-    "id": "msg_003",
-    "role": "assistant",
-    "content": "The calibration procedure involves...",
-    "createdAt": "2024-01-15T10:31:05Z",
-    "images": ["/uploads/kb-images/abc123/diagrams/calibration.png"]
-  }
+  "chunks":      ["text of chunk 1", "text of chunk 2"],
+  "sources":     [{ "filename": "guide.pdf", "documentDate": "2023-06-01" }],
+  "chunkFiles":  ["guide.pdf", "guide.pdf"],
+  "chunkImages": [["/uploads/kb-images/abc/fig1.png"], []]
 }
 ```
-
-**Backend logic:**
-1. Load full message history for this chat from SQLite
-2. Run `runQueryPipeline(content, language, history)`
-3. Persist user message to SQLite
-4. Persist assistant message (with images array) to SQLite
-5. Return assistant message
 
 ---
 
@@ -212,20 +339,15 @@ Send a user message and receive an assistant response.
 
 List all projects for the authenticated user, each with its chats.
 
-**Response `200`** — flat array:
+**Response `200`:**
 ```json
 [
   {
     "id": "proj_001",
     "name": "Raman Spectrometer",
-    "created_at": "2024-01-10T08:00:00Z",
+    "created_at": "2026-01-10T08:00:00Z",
     "chats": [
-      {
-        "id": "chat_001",
-        "title": "Calibration questions",
-        "lang": "en",
-        "created_at": "2024-01-11T09:00:00Z"
-      }
+      { "id": "chat_001", "title": "Calibration questions", "lang": "fr", "created_at": "..." }
     ]
   }
 ]
@@ -239,10 +361,7 @@ Create a new project.
 
 **Request body:** `{ "name": "My Project" }`
 
-**Response `201`:**
-```json
-{ "id": "proj_002", "name": "My Project", "createdAt": "2024-01-15T10:00:00Z" }
-```
+**Response `200`:** `{ "id": "proj_002", "name": "My Project", "created_at": "..." }`
 
 ---
 
@@ -252,7 +371,7 @@ Rename a project.
 
 **Request body:** `{ "name": "New Name" }`
 
-**Response `200`:** `{ "updated": true }`
+**Response `200`:** `{ "ok": true }`
 
 ---
 
@@ -260,7 +379,7 @@ Rename a project.
 
 Delete project and all its chats (cascade).
 
-**Response `200`:** `{ "deleted": true }`
+**Response `200`:** `{ "ok": true }`
 
 ---
 
@@ -270,23 +389,15 @@ Create a new chat inside a project.
 
 **Request body:** `{ "title": "Calibration questions" }`
 
-**Response `200`:**
-```json
-{ "id": "chat_001", "title": "Calibration questions", "lang": "fr", "created_at": "..." }
-```
+**Response `200`:** `{ "id": "chat_001", "title": "...", "lang": "fr", "created_at": "..." }`
 
 ---
 
 ### PATCH `/api/chats/:id`
 
-Update a chat's title and/or language. Both fields are optional; send only what changed.
+Update a chat's title and/or language.
 
 **Request body:** `{ "title": "New Title", "lang": "en" }`
-
-| Field   | Type   | Notes                                          |
-|---------|--------|------------------------------------------------|
-| `title` | String | Optional. Renames the chat.                    |
-| `lang`  | String | Optional. Persists the selected language (`en` \| `fr` \| `ar` \| …). Restored when the user reopens this chat. |
 
 **Response `200`:** `{ "ok": true }`
 
@@ -296,86 +407,56 @@ Update a chat's title and/or language. Both fields are optional; send only what 
 
 Delete a chat and all its messages.
 
-**Response `200`:** `{ "deleted": true }`
+**Response `200`:** `{ "ok": true }`
 
 ---
 
-## Auth Routes (`/api/auth`)
+### GET `/api/chats/:chatId/messages`
 
-### POST `/api/auth/register`
-
-**Request body:**
-```json
-{ "name": "Jane Doe", "email": "jane@example.com", "password": "..." }
-```
-
-**Response `201`:** `{ "message": "Verification email sent" }`
-**Response `409`:** `{ "error": "Email already registered" }`
-
----
-
-### GET `/api/auth/verify-email`
-
-**Query params:** `?token=<token>`
-
-**Response `200`:** `{ "message": "Email verified. Awaiting admin approval." }`
-**Response `400`:** `{ "error": "Invalid or expired token" }`
-
----
-
-### POST `/api/auth/login`
-
-**Request body:** `{ "email": "...", "password": "..." }`
-
-**Response `200`:** `{ "user": { "id": "...", "name": "...", "role": "USER" } }`
-**Response `401`:** `{ "error": "Invalid credentials" }`
-**Response `403`:** `{ "error": "Account pending approval" }` or `{ "error": "Account not verified" }`
-
----
-
-### POST `/api/auth/logout`
-
-**Response `200`:** `{ "message": "Logged out" }`
-
----
-
-### GET `/api/auth/me`
-
-Returns the authenticated user.
+All messages for a chat, ordered by creation time.
 
 **Response `200`:**
 ```json
-{ "id": "...", "name": "Jane Doe", "email": "...", "role": "USER", "provider": "email" }
+[
+  { "id": "msg_001", "role": "user",      "text": "What is ...", "timestamp": "...", "images": [] },
+  { "id": "msg_002", "role": "assistant", "text": "The answer...", "timestamp": "...", "images": ["/uploads/..."] }
+]
 ```
 
 ---
 
-## User Management Routes (`/api/users`) — Admin only
+### POST `/api/chats/:chatId/messages`
 
-### GET `/api/users/pending`
+Persist a message (user or assistant).
 
-**Response `200`:**
-```json
-{
-  "users": [
-    { "id": "...", "name": "...", "email": "...", "provider": "email", "createdAt": "..." }
-  ]
-}
-```
+**Request body:** `{ "id": "...", "role": "user"|"assistant", "text": "...", "timestamp": "...", "images": [] }`
+
+**Response `200`:** `{ "ok": true }`
 
 ---
 
-### POST `/api/users/:id/approve`
+## MCP Routes (`/api/mcp`) — Token-authenticated
 
-**Response `200`:** `{ "approved": true }`
+These endpoints are used by the MCP stdio server (`backend/mcp-server.js`).
+Authentication uses the `X-MCP-Token` header instead of session cookies.
+
+### POST `/api/mcp/search`
+
+**Request body:** `{ "query": "...", "topK": 8 }`
+
+**Response `200`:** `{ "chunks": [ { "text": "...", "filename": "...", "documentDate": "..." } ] }`
 
 ---
 
-### DELETE `/api/users/:id`
+### GET `/api/mcp/documents`
 
-Deny and delete a user.
+**Response `200`:** `{ "documents": [ { "filename": "...", "lang": "...", "summary": "...", "chunkCount": 4, ... } ] }`
 
-**Response `200`:** `{ "deleted": true }`
+---
+
+### GET `/api/mcp/stats`
+
+**Response `200`:** `{ "documents": 23, "chunks": 412, "entities": 891 }`
 
 ---
 
@@ -387,7 +468,12 @@ All error responses follow this shape:
 { "error": "Human-readable error message" }
 ```
 
-HTTP status codes used:
+Auth-specific errors also include a `code` field:
+```json
+{ "error": "Your account is awaiting admin approval.", "code": "pending_approval" }
+```
+
+HTTP status codes:
 | Code | Meaning                        |
 |------|--------------------------------|
 | 400  | Bad request / validation error |
@@ -396,5 +482,5 @@ HTTP status codes used:
 | 404  | Resource not found             |
 | 409  | Conflict (duplicate)           |
 | 413  | Payload too large              |
-| 429  | Rate limited                   |
+| 503  | Feature disabled (e.g. LDAP)  |
 | 500  | Internal server error          |

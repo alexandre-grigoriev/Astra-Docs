@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, LogOut, CheckCircle2, Plus, Trash2, MessageSquare, FolderOpen, Pencil } from "lucide-react";
+import { ChevronDown, LogOut, CheckCircle2, Plus, Trash2, MessageSquare, FolderOpen, Pencil, Users } from "lucide-react";
 import "./App.css";
-import { LANGS } from "./constants";
+import { LANGS, CONTEXT_LIMIT_TOKENS } from "./constants";
 import { cn, UserStatusIcon } from "./utils";
 import { TopSelect } from "./components/ui/TopSelect";
 import { AuthDialog } from "./components/auth/AuthDialog";
 import { AddPdfDialog } from "./components/knowledge-base/AddPdfDialog";
 import { ValidationDialog } from "./components/admin/ValidationDialog";
+import { UsersDialog } from "./components/admin/UsersDialog";
 import { ChatPanel } from "./components/chat/ChatPanel";
-import { sendToGemini, type ChatMessage as GeminiMessage } from "./services/gemini";
+import { sendToGemini, estimateTokens, type ChatMessage as GeminiMessage } from "./services/gemini";
 import type { ProjectSummary, ChatMessage } from "./types";
 
 function makeId() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
@@ -18,7 +19,7 @@ function now()    { return new Date().toISOString(); }
 export default function App() {
   const [user, setUser] = useState<null | {
     id: string; name: string; email: string; picture?: string;
-    role: "admin" | "user"; provider: string;
+    role: "admin" | "contributor" | "user"; provider: string;
   }>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authOpen, setAuthOpen] = useState(false);
@@ -28,6 +29,7 @@ export default function App() {
   const [lang, setLang] = useState("fr");
   const [addPdfOpen, setAddPdfOpen] = useState(false);
   const [validationOpen, setValidationOpen] = useState(false);
+  const [usersOpen, setUsersOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -379,9 +381,10 @@ export default function App() {
 
   // ── Derived state ─────────────────────────────────────────────────────────────
 
-  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-  const activeChat = activeProject?.chats.find((c) => c.id === activeChatId) ?? null;
+  const activeProject  = projects.find((p) => p.id === activeProjectId) ?? null;
+  const activeChat     = activeProject?.chats.find((c) => c.id === activeChatId) ?? null;
   const activeMessages = activeChatId ? (chatMessages[activeChatId] ?? []) : [];
+  const contextTokens  = estimateTokens(activeMessages, input);
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -424,20 +427,27 @@ export default function App() {
                     <button className="blueBtn w-full" onClick={() => setAuthOpen(true)}>Sign in</button>
                   ) : (
                     <>
+                      {(user.role === "admin" || user.role === "contributor") && (
+                        <button className="ghostBtn w-full" style={{ justifyContent: "flex-start" }}
+                          onClick={() => { setAddPdfOpen(true); setUserMenuOpen(false); }}>
+                          ⊕  Knowledge base…
+                        </button>
+                      )}
                       {user.role === "admin" && (
                         <>
-                          <button className="ghostBtn w-full" style={{ justifyContent: "flex-start" }}
-                            onClick={() => { setAddPdfOpen(true); setUserMenuOpen(false); }}>
-                            ⊕  Knowledge base…
-                          </button>
                           <button
                             className="ghostBtn w-full"
                             style={{ justifyContent: "flex-start", opacity: pendingCount === 0 ? 0.45 : 1 }}
                             disabled={pendingCount === 0}
                             onClick={() => { setValidationOpen(true); setUserMenuOpen(false); }}
                           >
-                            ✓  Validate users
+                            ✓  Validation requests
                             {pendingCount > 0 && <span className="validationBadge">{pendingCount}</span>}
+                          </button>
+                          <button className="ghostBtn w-full" style={{ justifyContent: "flex-start" }}
+                            onClick={() => { setUsersOpen(true); setUserMenuOpen(false); }}>
+                            <Users className="h-4 w-4" style={{ marginRight: 6 }} />
+                            Users
                           </button>
                         </>
                       )}
@@ -572,6 +582,8 @@ export default function App() {
           input={input}
           onInputChange={setInput}
           onSend={send}
+          contextTokens={contextTokens}
+          contextLimit={CONTEXT_LIMIT_TOKENS}
         />
       </main>
 
@@ -583,6 +595,12 @@ export default function App() {
         open={validationOpen}
         onClose={() => setValidationOpen(false)}
         onCountChange={setPendingCount}
+      />
+
+      <UsersDialog
+        open={usersOpen}
+        onClose={() => setUsersOpen(false)}
+        currentUserId={user?.id ?? ""}
       />
 
       <AuthDialog

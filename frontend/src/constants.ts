@@ -36,3 +36,10 @@ export const UI_STRINGS: Record<string, { welcome: string; error: string }> = {
 
 export const ADMIN_EMAILS  = ["alexandre.grigoriev@gmail.com", "alexandre.grigoriev@horiba.com"];
 export const TRUSTED_USERS: string[] = [];
+
+// ── Context limit ─────────────────────────────────────────────────────────────
+// Maximum estimated tokens allowed in a single chat context.
+// Override by setting VITE_CONTEXT_LIMIT_TOKENS in your .env file.
+export const CONTEXT_LIMIT_TOKENS = Number(import.meta.env.VITE_CONTEXT_LIMIT_TOKENS ?? 16_000);
+// Warn at 87.5 % of the limit (14 000 by default).
+export const CONTEXT_WARN_TOKENS  = Math.round(CONTEXT_LIMIT_TOKENS * 0.875);

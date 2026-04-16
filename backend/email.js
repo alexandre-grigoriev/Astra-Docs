@@ -10,7 +10,7 @@ import "dotenv/config";
 import dns from "dns";
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
-import { APP_BASE_URL, FRONTEND_ORIGIN } from "./shared.js";
+import { APP_BASE_URL, FRONTEND_ORIGIN, ADMIN_SEED_EMAIL } from "./shared.js";
 
 // ── Transport selection ───────────────────────────────────────────────────────
 const USE_RESEND = !!process.env.RESEND_API_KEY;
@@ -193,6 +193,57 @@ export async function sendRejectionEmail(email, name) {
   } catch (err) {
     console.error("✗ Email send failed:", err.message);
   }
+}
+
+export async function sendAdminNewLdapUserEmail(userName, userEmail, adminEmails = []) {
+  const html = `<!DOCTYPE html><html lang="en">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f3f5f7;font-family:Inter,system-ui,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f7;padding:40px 0;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1677ff;padding:28px 36px;">
+          <span style="font-size:22px;font-weight:700;color:#ffffff;letter-spacing:-0.5px;">HORIBA</span>
+          <span style="font-size:13px;color:rgba(255,255,255,0.75);margin-left:10px;">Astra Docs</span>
+        </td></tr>
+        <tr><td style="padding:36px 36px 24px;">
+          <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">New access request</p>
+          <p style="margin:0 0 24px;font-size:15px;color:#374151;line-height:1.6;">
+            A HORIBA user has just authenticated and is requesting access to Astra Docs:<br><br>
+            <strong>${userName || userEmail}</strong>${userName ? ` &lt;${userEmail}&gt;` : ""}
+          </p>
+          <p style="margin:0 0 24px;font-size:15px;color:#374151;line-height:1.6;">
+            Please log in to approve or deny this request.
+          </p>
+          <table cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
+            <tr><td style="background:#1677ff;border-radius:8px;">
+              <a href="${FRONTEND_ORIGIN}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">Open Astra Docs</a>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:20px 36px;border-top:1px solid #f3f5f7;font-size:12px;color:#9ca3af;">
+          HORIBA FRANCE · AI LAB &nbsp;·&nbsp; Astra Docs &nbsp;·&nbsp; Do not reply to this email.
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+
+  // Always include the seed admin; merge with any DB admins passed in
+  const recipients = [...new Set([ADMIN_SEED_EMAIL, ...adminEmails])].filter(Boolean);
+
+  console.log(`\n── Admin notification email ──────────────────────`);
+  console.log(`New LDAP user pending approval: ${userName || ""} <${userEmail}>`);
+  console.log(`Recipients: ${recipients.join(", ")}`);
+  console.log(`─────────────────────────────────────────────────\n`);
+
+  await Promise.allSettled(
+    recipients.map(to =>
+      sendMail({ to, subject: `New access request: ${userName || userEmail}`, html })
+        .then(() => console.log("✓ Admin notification sent to", to))
+        .catch(err => console.error(`✗ Admin notification to ${to} failed:`, err.message))
+    )
+  );
 }
 
 export async function sendVerificationEmail(email, name, token) {

@@ -14,6 +14,8 @@ export function ChatPanel({
   input,
   onInputChange,
   onSend,
+  contextTokens = 0,
+  contextLimit  = 16_000,
 }: {
   chat: ChatSummary | null;
   messages: ChatMessage[];
@@ -22,7 +24,11 @@ export function ChatPanel({
   input: string;
   onInputChange: (v: string) => void;
   onSend: (text?: string) => void;
+  contextTokens?: number;
+  contextLimit?: number;
 }) {
+  const contextWarn  = contextTokens >= Math.round(contextLimit * 0.875);
+  const contextFull  = contextTokens >= contextLimit;
   const scrollRef = useRef<HTMLDivElement>(null);
   const speech = useSpeechRecognition(lang);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -111,28 +117,52 @@ export function ChatPanel({
             )}
           </div>
 
+          {/* Context limit banner */}
+          {contextWarn && (
+            <div style={{
+              margin: "0 0 8px",
+              padding: "8px 14px",
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 500,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: contextFull ? "#fef2f2" : "#fffbeb",
+              color:      contextFull ? "#b91c1c"  : "#92400e",
+              border:     `1px solid ${contextFull ? "#fecaca" : "#fde68a"}`,
+            }}>
+              {contextFull ? "⛔" : "⚠️"}
+              <span>
+                {contextFull
+                  ? `Context limit reached (${(contextTokens / 1000).toFixed(1)}k / ${contextLimit / 1000}k tokens). Please start a new chat to continue.`
+                  : `Chat context is ${(contextTokens / 1000).toFixed(1)}k / ${contextLimit / 1000}k tokens — consider starting a new chat soon.`}
+              </span>
+            </div>
+          )}
+
           <div className="chatInputRow">
             <input
               className="chatInput"
               value={input}
               onChange={(e) => onInputChange(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && input.trim()) onSend(); }}
-              placeholder="Type your question…"
-              disabled={isThinking}
+              onKeyDown={(e) => { if (e.key === "Enter" && input.trim() && !contextFull) onSend(); }}
+              placeholder={contextFull ? "Context limit reached — please start a new chat." : "Type your question…"}
+              disabled={isThinking || contextFull}
             />
             {input.trim() ? (
-              <button className="chatInputIconBtn" onClick={() => onSend()} disabled={isThinking} title="Send">
+              <button className="chatInputIconBtn" onClick={() => onSend()} disabled={isThinking || contextFull} title="Send">
                 <img src="/send.png" alt="Send" className="chatInputIcon" />
               </button>
             ) : (
               <button
                 className={cn("chatInputIconBtn", speech.isRecording && "chatMicRecording")}
-                title={speech.supported ? (speech.isRecording ? "Release to send" : "Hold to speak") : "Voice not supported"}
-                onPointerDown={(e) => { e.preventDefault(); speech.start((text) => onSend(text)); }}
+                title={contextFull ? "Context limit reached" : speech.supported ? (speech.isRecording ? "Release to send" : "Hold to speak") : "Voice not supported"}
+                onPointerDown={(e) => { e.preventDefault(); if (!contextFull) speech.start((text) => onSend(text)); }}
                 onPointerUp={(e) => { e.preventDefault(); speech.stop(); }}
                 onPointerLeave={(e) => { e.preventDefault(); if (speech.isRecording) speech.stop(); }}
                 onPointerCancel={(e) => { e.preventDefault(); if (speech.isRecording) speech.stop(); }}
-                disabled={!speech.supported}
+                disabled={!speech.supported || contextFull}
               >
                 {speech.isRecording
                   ? <Mic className="chatInputIcon" style={{ color: "#e53e3e" }} />

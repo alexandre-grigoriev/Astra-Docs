@@ -7,12 +7,12 @@ import bcrypt from "bcrypt";
 import { Issuer } from "openid-client";
 import { Client as LdapClient } from "ldapts";
 import {
-  db, sessions, oauthStates, stmtFindByEmail, stmtFindByToken, stmtGoogleUpsert, stmtLdapUpsert, stmtFindById, stmtUpdateRole,
+  db, sessions, oauthStates, stmtFindByEmail, stmtFindByToken, stmtGoogleUpsert, stmtLdapUpsert, stmtFindById, stmtUpdateRole, stmtAllAdmins,
   getSession, createSession, clearSessionCookie, dbUserToSession, makeId, now,
   COOKIE_NAME, FRONTEND_ORIGIN, BCRYPT_ROUNDS, VERIFY_TTL_MS,
-  setGoogleClient,
+  ADMIN_SEED_EMAIL, setGoogleClient,
 } from "../shared.js";
-import { sendVerificationEmail } from "../email.js";
+import { sendVerificationEmail, sendAdminNewLdapUserEmail } from "../email.js";
 
 export const router = express.Router();
 
@@ -229,20 +229,33 @@ router.post("/api/auth/ldap", async (req, res) => {
 
     await client.unbind();
 
-    // Upsert into local DB — reuse existing account if email already known
+    // Check whether this user already exists in the local DB
     const existing = stmtFindByEmail.get(email);
-    let dbUser;
+
     if (existing) {
+      // Returning user — update display name and last_login but never touch status
       db.prepare("UPDATE users SET name=COALESCE(?,name), provider='ldap', verified=1, last_login=datetime('now') WHERE id=?")
         .run(displayName || null, existing.id);
-      dbUser = stmtFindById.get(existing.id);
+      const dbUser = stmtFindById.get(existing.id);
+
+      if (dbUser.status === "pending") {
+        return res.status(403).json({ error: "Your access request is awaiting admin approval. You will receive an email once it is validated.", code: "pending_approval" });
+      }
+      if (dbUser.status === "rejected") {
+        return res.status(403).json({ error: "Your access request has been denied. Please contact an administrator.", code: "rejected" });
+      }
+      // approved → normal login
+      createSession(res, dbUserToSession(dbUser));
+      return res.json({ ok: true });
+
     } else {
+      // First-time LDAP user — insert with status='pending', notify admin
       const userId = "ldap-" + samAccount.toLowerCase();
       stmtLdapUpsert.run(userId, email, displayName);
-      dbUser = stmtFindById.get(userId);
+      const adminEmails = stmtAllAdmins.all().map(a => a.email);
+      sendAdminNewLdapUserEmail(displayName, email, adminEmails).catch(() => {});
+      return res.status(403).json({ ok: false, code: "ldap_pending", error: "Your access request has been sent to the administrator. You will be notified by email once approved." });
     }
-    createSession(res, dbUserToSession(dbUser));
-    res.json({ ok: true });
   } catch (e) {
     try { await client.unbind(); } catch {}
     if (e.code === "InvalidCredentialsError" || e.message?.includes("Invalid Credentials") || e.message?.includes("invalidCredentials")) {

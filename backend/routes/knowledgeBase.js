@@ -17,7 +17,7 @@ import JSZip from "jszip";
 import crypto from "crypto";
 import path from "path";
 import fs from "fs/promises";
-import { requireAuth, requireAdmin } from "../shared.js";
+import { requireAuth, requireAdmin, requireContributor } from "../shared.js";
 import { ingestDocument } from "../ingestion/pipeline.js";
 import { searchKnowledgeBase, translateChunks } from "../retrieval/query_pipeline.js";
 import { listDocuments, deleteDocument, findDocumentIdsByFilepath, getDocumentImagesByFilename } from "../graph/queries/document.js";
@@ -66,12 +66,13 @@ function _sseFinish(jobId) {
   const msg = `event: done\ndata: {}\n\n`;
   if (job.res) { job.res.write(msg); job.res.end(); }
   else         job.queue.push(msg);
-  setTimeout(() => _jobs.delete(jobId), 30_000);
+  // Keep job available for 10 min so the frontend can reconnect and receive the done event
+  setTimeout(() => _jobs.delete(jobId), 10 * 60_000);
 }
 
 // ── Single file upload (PDF / Markdown / DOCX) ────────────────────────────────
 
-router.post("/api/knowledge-base/upload", requireAuth, requireAdmin, kbUpload.any(), async (req, res) => {
+router.post("/api/knowledge-base/upload", requireAuth, requireContributor, kbUpload.any(), async (req, res) => {
   const file = req.files?.[0];
   if (!file) return res.status(400).json({ error: "File required (pdf, md, docx)" });
   try {
@@ -87,7 +88,7 @@ router.post("/api/knowledge-base/upload", requireAuth, requireAdmin, kbUpload.an
 
 // ── Batch upload — starts SSE job, returns jobId immediately ──────────────────
 
-router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBatchUpload.array("files", 100), (req, res) => {
+router.post("/api/knowledge-base/upload-batch", requireAuth, requireContributor, kbBatchUpload.array("files", 100), (req, res) => {
   if (!req.files?.length) return res.status(400).json({ error: "No files provided" });
 
   const jobId  = crypto.randomUUID();
@@ -152,7 +153,7 @@ router.post("/api/knowledge-base/upload-batch", requireAuth, requireAdmin, kbBat
 
 // ── SSE progress stream ────────────────────────────────────────────────────────
 
-router.get("/api/knowledge-base/batch-progress/:jobId", requireAuth, requireAdmin, (req, res) => {
+router.get("/api/knowledge-base/batch-progress/:jobId", requireAuth, requireContributor, (req, res) => {
   const job = _jobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: "Job not found" });
 
@@ -165,9 +166,18 @@ router.get("/api/knowledge-base/batch-progress/:jobId", requireAuth, requireAdmi
   for (const msg of job.queue) res.write(msg);
   job.queue = [];
 
-  if (job.done) { res.write(`event: done\ndata: {}\n\n`); res.end(); }
+  if (job.done) { res.write(`event: done\ndata: {}\n\n`); res.end(); return; }
 
-  req.on("close", () => { if (_jobs.has(req.params.jobId)) _jobs.get(req.params.jobId).res = null; });
+  // Heartbeat every 15 s — prevents nginx proxy_read_timeout from closing idle connections
+  // (critical for large ZIPs where individual files take a long time to enrich/embed)
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(": ping\n\n");
+  }, 15_000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    if (_jobs.has(req.params.jobId)) _jobs.get(req.params.jobId).res = null;
+  });
 });
 
 // ── List documents ─────────────────────────────────────────────────────────────
@@ -179,7 +189,7 @@ router.get("/api/knowledge-base/documents", requireAuth, async (_req, res) => {
 
 // ── Delete document ────────────────────────────────────────────────────────────
 
-router.delete("/api/knowledge-base/documents/:id", requireAuth, requireAdmin, async (req, res) => {
+router.delete("/api/knowledge-base/documents/:id", requireAuth, requireContributor, async (req, res) => {
   try { await deleteDocument(req.params.id); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -201,7 +211,7 @@ router.get("/api/knowledge-base/documents/:id/images", requireAuth, async (req, 
 // ── Update document (replace with new version) ─────────────────────────────────
 // Deletes the existing doc+chunks then re-ingests the new file under the same filepath.
 
-router.post("/api/knowledge-base/documents/:id/update", requireAuth, requireAdmin, kbUpload.any(), async (req, res) => {
+router.post("/api/knowledge-base/documents/:id/update", requireAuth, requireContributor, kbUpload.any(), async (req, res) => {
   const file = req.files?.[0];
   if (!file) return res.status(400).json({ error: "File required" });
 
