@@ -400,7 +400,16 @@ export default function App() {
           <div className="topRight" ref={userMenuRef}>
             <TopSelect imgSrc="/language.png" value={lang} options={LANGS} onChange={setLang} />
 
-            <button className="userBtn" onClick={() => setUserMenuOpen((v) => !v)} title={user?.email ?? "Sign in"}>
+            <button className="userBtn" onClick={() => {
+              const opening = !userMenuOpen;
+              setUserMenuOpen(opening);
+              if (opening && user?.role === "admin") {
+                fetch("/api/users/pending", { credentials: "include" })
+                  .then((r) => r.ok ? r.json() : [])
+                  .then((data) => setPendingCount(Array.isArray(data) ? data.length : 0))
+                  .catch(() => {});
+              }
+            }} title={user?.email ?? "Sign in"}>
               <span className="userAvatar">
                 <UserStatusIcon email={user?.email} className="h-5 w-5" />
               </span>

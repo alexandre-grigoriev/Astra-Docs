@@ -61,9 +61,9 @@ export async function searchKnowledgeBase(query, topK = DEFAULT_TOP_K) {
     .map(c => ({
       chunkId:      c.chunkId,
       docId:        c.docId,
-      // enrichedText is the authoritative content; text is clean (no IMAGE_REFs) but less informative
+      // Embed on enrichedText (better semantic signal) but answer on cleanText (exact source, tables intact)
       enrichedText: c.enrichedText ?? c.text ?? '',
-      text:         c.enrichedText ?? c.text ?? '',
+      text:         c.text         ?? c.enrichedText ?? '',
       images:       c.images       ?? [],
       filename:     c.filename     ?? null,
       documentDate: c.documentDate ?? null,

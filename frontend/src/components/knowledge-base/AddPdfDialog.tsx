@@ -248,7 +248,7 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
     <AnimatePresence>
       {open && (
         <motion.div className="modalOverlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <div className="modalBackdrop" onClick={onClose} />
+          <div className="modalBackdrop" onClick={batchRunning ? undefined : onClose} />
           <motion.div
             initial={{ opacity: 0, y: 10, scale: 0.985 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -257,7 +257,7 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
             className="presModalWrap"
           >
             <div className="presModal">
-              <button className="presCloseBtn" onClick={onClose} title="Close"><X className="h-5 w-5" /></button>
+              <button className="presCloseBtn" onClick={batchRunning ? undefined : onClose} title={batchRunning ? "Ingestion in progress…" : "Close"} style={batchRunning ? { opacity: 0.3, cursor: "not-allowed" } : {}}><X className="h-5 w-5" /></button>
               <div className="presModalHeader">
                 <div className="presModalTitle">Knowledge base</div>
                 <div className="presModalSubtitle">Upload PDF, Markdown, or DOCX documents</div>
@@ -366,7 +366,13 @@ export function AddPdfDialog({ open, onClose }: { open: boolean; onClose: () => 
                     )}
                   </div>
                   <div className="presFooter">
-                    <button className="presCancelBtn" onClick={onClose}>Cancel</button>
+                    {batchRunning && (
+                      <span style={{ fontSize: 12, color: "#9ca3af", alignSelf: "center" }}>Ingestion running — do not close</span>
+                    )}
+                    <button className="presCancelBtn" onClick={() => {
+                      if (batchRunning && !confirm("Ingestion is still running on the server. Close and lose progress tracking?")) return;
+                      onClose();
+                    }}>Cancel</button>
                     <button className="presSubmitBtn" disabled={!batchFile || batchRunning} onClick={doBatch}>
                       {batchRunning ? "Processing…" : "Ingest ZIP"}
                     </button>

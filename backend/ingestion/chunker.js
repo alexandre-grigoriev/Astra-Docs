@@ -1,53 +1,114 @@
 /**
- * ingestion/chunker.js — 500-word sliding-window chunker.
+ * ingestion/chunker.js — section-aware chunker with sliding-window fallback.
  *
- * Per RAG_PIPELINE.md A.4:
- * - Window: 500 words, step: 450 words (50-word overlap)
- * - [IMAGE_REF:path] tokens count as one word and are never split
- * - Chunks with fewer than 20 words are discarded (end-of-document remnants)
- * - Returns Chunk[] with { index, text, wordCount }
+ * Primary strategy: split on markdown headers (## / ###) so each section
+ * stays in one chunk with its title. For documents without headers, split
+ * on paragraph blocks (blank lines). This prevents "Sample: cyclohexane"
+ * headings from being separated from their tables, which caused the LLM to
+ * cross-associate peaks with wrong samples.
+ *
+ * Fallback: sections > MAX_CHUNK_WORDS are sub-chunked with a sliding window.
+ * Sections < MIN_WORDS are merged with the next section.
  */
 
-const WINDOW_SIZE = 500;
-const STEP_SIZE   = 450; // window - overlap(50)
-const MIN_WORDS   = 20;
+const WINDOW_SIZE     = 500;
+const STEP_SIZE       = 450; // 50-word overlap
+const MIN_WORDS       = 20;
+const MAX_CHUNK_WORDS = 500;
+
+function countWords(text) {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function slidingWindow(text) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const result = [];
+  let pos = 0;
+  while (pos < words.length) {
+    const slice = words.slice(pos, pos + WINDOW_SIZE);
+    const joined = slice.join(' ');
+    if (slice.length >= MIN_WORDS || joined.includes('[IMAGE_REF:')) {
+      result.push(joined);
+    }
+    pos += STEP_SIZE;
+  }
+  return result;
+}
+
+/**
+ * Split text into logical sections:
+ * 1. If the document has markdown headers (## / ###), split on those.
+ * 2. Otherwise split on paragraph blocks (two or more blank lines).
+ */
+function splitIntoSections(text) {
+  const lines = text.split('\n');
+  const headerPattern = /^#{1,4} /;
+  const hasHeaders = lines.some(l => headerPattern.test(l));
+
+  if (hasHeaders) {
+    const sections = [];
+    let current = [];
+    for (const line of lines) {
+      if (headerPattern.test(line) && current.length > 0) {
+        sections.push(current.join('\n'));
+        current = [line];
+      } else {
+        current.push(line);
+      }
+    }
+    if (current.length > 0) sections.push(current.join('\n'));
+    return sections;
+  }
+
+  // No headers — split on blank lines, keeping each block intact
+  return text.split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
+}
 
 /**
  * @typedef {object} Chunk
- * @property {number} index     - 0-based position in document
- * @property {string} text      - chunk text with IMAGE_REF tokens intact
+ * @property {number} index
+ * @property {string} text
  * @property {number} wordCount
  */
 
 /**
- * Splits text into overlapping word-based chunks.
+ * Splits text into section-aware chunks.
  *
  * @param {string} text - full extracted text (with IMAGE_REF tokens)
  * @returns {Chunk[]}
  */
 export function chunkText(text) {
-  // [IMAGE_REF:path] tokens contain no spaces so they naturally split as one word
-  const words = text.split(/\s+/).filter(Boolean);
-  const chunks = [];
-  let pos = 0;
+  const sections = splitIntoSections(text);
+  const rawChunks = [];
+  let pending = '';
 
-  while (pos < words.length) {
-    const slice = words.slice(pos, pos + WINDOW_SIZE);
-    const wordCount = slice.length;
+  for (const section of sections) {
+    const combined = pending ? pending + '\n\n' + section : section;
+    const wc = countWords(combined);
 
-    const chunkText = slice.join(' ');
-    // Keep chunks that meet the word minimum OR contain at least one IMAGE_REF
-    // (a diagram-only file would otherwise produce zero chunks and lose its images)
-    if (wordCount >= MIN_WORDS || chunkText.includes('[IMAGE_REF:')) {
-      chunks.push({
-        index: chunks.length,
-        text: chunkText,
-        wordCount,
-      });
+    if (wc < MIN_WORDS && !combined.includes('[IMAGE_REF:')) {
+      // Too small — carry forward and merge with next section
+      pending = combined;
+    } else if (wc <= MAX_CHUNK_WORDS) {
+      // Good size — emit as-is
+      rawChunks.push(combined);
+      pending = '';
+    } else {
+      // Too large — flush pending first, then sub-chunk this section
+      if (pending) { rawChunks.push(pending); pending = ''; }
+      const subs = slidingWindow(section);
+      rawChunks.push(...subs);
     }
-
-    pos += STEP_SIZE;
   }
 
-  return chunks;
+  // Flush any remaining pending content
+  if (pending && (countWords(pending) >= MIN_WORDS || pending.includes('[IMAGE_REF:'))) {
+    rawChunks.push(pending);
+  }
+
+  return rawChunks.map((t, i) => ({
+    index:     i,
+    text:      t.trim(),
+    wordCount: countWords(t.trim()),
+  }));
 }
