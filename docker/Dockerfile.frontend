@@ -9,7 +9,7 @@ ENV VITE_GEMINI_API_KEY=$VITE_GEMINI_API_KEY
 
 WORKDIR /app
 COPY frontend/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build
 

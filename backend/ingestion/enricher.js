@@ -103,8 +103,9 @@ ${sample}`;
  * @param {number} totalChunks      - total chunk count in document
  * @returns {Promise<EnrichedChunk>}
  */
-export async function enrichChunk(cleanText, documentSummary, chunkIndex, totalChunks) {
-  const prompt = `DOCUMENT CONTEXT:
+export async function enrichChunk(cleanText, documentSummary, chunkIndex, totalChunks, filepath = '') {
+  const fileCtx = filepath ? `Source file: ${filepath}\n` : '';
+  const prompt = `${fileCtx}DOCUMENT CONTEXT:
 ${documentSummary}
 
 CHUNK ${chunkIndex + 1} of ${totalChunks}:

@@ -43,8 +43,10 @@ if (-not $env:VITE_GEMINI_API_KEY) {
 Write-Host "==> Building images..." -ForegroundColor Cyan
 Push-Location $PSScriptRoot
 try {
-    docker compose build
-    if ($LASTEXITCODE -ne 0) { throw "docker compose build failed" }
+    docker compose build backend
+    if ($LASTEXITCODE -ne 0) { throw "docker compose build backend failed" }
+    docker compose build frontend
+    if ($LASTEXITCODE -ne 0) { throw "docker compose build frontend failed" }
 
     # Tag a versioned release if requested (:latest already set by compose)
     if ($Tag -ne "latest") {

@@ -33,24 +33,35 @@ if (USE_RESEND) {
   resend = new Resend(process.env.RESEND_API_KEY);
   console.log("Email: using Resend API");
 } else if (USE_SMTP) {
-  const resolvedHost = await new Promise((resolve) =>
-    dns.resolve4(process.env.SMTP_HOST, (err, addrs) => {
-      const ip = !err && addrs?.length ? addrs[0] : process.env.SMTP_HOST;
-      if (!err) console.log(`SMTP ${process.env.SMTP_HOST} → ${ip} (IPv4)`);
-      resolve(ip);
-    })
-  );
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587");
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+
+  // For SSL (port 465) use the hostname directly so SNI works correctly.
+  // For plain/STARTTLS, pre-resolve to IPv4 to handle internal servers that
+  // don't respond on IPv6.
+  let resolvedHost = smtpHost;
+  if (!smtpSecure) {
+    resolvedHost = await new Promise((resolve) =>
+      dns.resolve4(smtpHost, (err, addrs) => {
+        const ip = !err && addrs?.length ? addrs[0] : smtpHost;
+        if (!err) console.log(`SMTP ${smtpHost} → ${ip} (IPv4)`);
+        resolve(ip);
+      })
+    );
+  }
+
   transporter = nodemailer.createTransport({
     host:              resolvedHost,
-    port:              parseInt(process.env.SMTP_PORT || "587"),
-    secure:            process.env.SMTP_SECURE === "true",
+    port:              smtpPort,
+    secure:            smtpSecure,
     connectionTimeout: 5_000,
     greetingTimeout:   5_000,
     socketTimeout:     5_000,
     auth: process.env.SMTP_USER
       ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
       : undefined,
-    tls: { rejectUnauthorized: false },
+    tls: { servername: smtpHost, rejectUnauthorized: false },
   });
   console.log("Email: using SMTP");
 } else {

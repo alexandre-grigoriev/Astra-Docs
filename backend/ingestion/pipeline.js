@@ -192,7 +192,7 @@ export async function ingestDocument({ buffer, filename, uploadedBy, documentDat
 
       // 5b. LLM enrichment
       const { enrichedText, entities, relations } = await enrichChunk(
-        cleanText, summary, chunk.index, chunks.length
+        cleanText, summary, chunk.index, chunks.length, resolvedFilepath
       );
 
       // 5c. Embed enriched text

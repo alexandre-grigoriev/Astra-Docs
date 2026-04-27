@@ -21,7 +21,7 @@ import { mergeResults }       from './merger.js';
 import { expandWithNeighbors } from './expander.js';
 import { translateChunks }    from './translator.js';
 
-const DEFAULT_TOP_K = 10;
+const DEFAULT_TOP_K = 30;
 
 /**
  * Runs the full retrieval pipeline for a user query.
