@@ -38,6 +38,7 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [chatMessages, setChatMessages] = useState<Record<string, ChatMessage[]>>({});
   const [isThinking, setIsThinking] = useState(false);
@@ -258,6 +259,20 @@ export default function App() {
       ));
     } catch {}
     setRenamingChatId(null);
+  }
+
+  async function renameProject(projectId: string, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+      await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      setProjects((prev) => prev.map((p) => p.id === projectId ? { ...p, name: trimmed } : p));
+    } catch {}
+    setRenamingProjectId(null);
   }
 
   // F2 shortcut — start renaming the currently active chat
@@ -518,16 +533,36 @@ export default function App() {
                 <div
                   className={cn("projectRow", activeProjectId === project.id && "projectRowActive")}
                   onClick={() => {
+                    if (renamingProjectId === project.id) return;
                     setActiveProjectId(project.id);
                     if (activeChatId && !project.chats.find((c) => c.id === activeChatId)) setActiveChatId(null);
                   }}
                 >
                   <FolderOpen className="h-3.5 w-3.5 flex-shrink-0" />
-                  <span className="projectName">{project.name}</span>
+                  {renamingProjectId === project.id ? (
+                    <input
+                      className="chatRenameInput"
+                      autoFocus
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") renameProject(project.id, renameValue);
+                        if (e.key === "Escape") setRenamingProjectId(null);
+                      }}
+                      onBlur={() => renameProject(project.id, renameValue)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span className="projectName">{project.name}</span>
+                  )}
                   <div className="projectActions">
                     <button className="sidebarIconBtn" title="New chat"
                       onClick={(e) => { e.stopPropagation(); createChat(project.id); }}>
                       <Plus className="h-5 w-5" />
+                    </button>
+                    <button className="sidebarIconBtn" title="Rename project"
+                      onClick={(e) => { e.stopPropagation(); setRenamingProjectId(project.id); setRenameValue(project.name); }}>
+                      <Pencil className="h-4 w-4" />
                     </button>
                     <button className="sidebarIconBtn sidebarIconBtnDanger" title="Delete project"
                       onClick={(e) => { e.stopPropagation(); deleteProject(project.id); }}>

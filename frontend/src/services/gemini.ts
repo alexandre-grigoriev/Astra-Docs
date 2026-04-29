@@ -53,18 +53,13 @@ async function fetchKnowledgeBaseContext(
       const label = chunkFiles[i];
       return label ? `[${label}]\n${c}` : c;
     }).join("\n---\n");
-    // Collect images from the top 2 unique files in results (sorted by relevance).
-    // Using only top-2 files avoids pulling in images from lower-ranked documents
-    // (e.g. Examples.md sandbox screenshots) while still showing images from both
-    // the primary and secondary relevant documents (e.g. Concept.md + Design.md).
-    const seenFiles = new Set<string>();
-    const topFiles: string[] = [];
-    for (const f of chunkFiles) {
-      if (f && !seenFiles.has(f)) { seenFiles.add(f); topFiles.push(f); }
-      if (topFiles.length === 2) break;
-    }
+    // Collect images only from the top-ranked chunks (by position = by score).
+    // The "top 2 files" approach caused images from neighbor-expanded, low-relevance
+    // chunks (e.g. overview diagrams, calibration spectra) to appear for unrelated
+    // queries because ALL images from a top-2 file were included regardless of
+    // whether the image-carrying chunk was actually relevant.
     const images = [
-      ...new Set(chunkFiles.flatMap((f, i) => topFiles.includes(f ?? "") ? (chunkImages[i] ?? []) : []))
+      ...new Set(chunkImages.slice(0, 4).flat())
     ] as string[];
     return { context, sources, images };
   } catch {
