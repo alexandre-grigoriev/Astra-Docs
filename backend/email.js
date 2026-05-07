@@ -8,6 +8,7 @@
  */
 import "dotenv/config";
 import dns from "dns";
+import os from "os";
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
 import { APP_BASE_URL, FRONTEND_ORIGIN, ADMIN_SEED_EMAIL } from "./shared.js";
@@ -33,9 +34,30 @@ if (USE_RESEND) {
   resend = new Resend(process.env.RESEND_API_KEY);
   console.log("Email: using Resend API");
 } else if (USE_SMTP) {
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpPort = parseInt(process.env.SMTP_PORT || "587");
-  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpHost   = process.env.SMTP_HOST;
+  const smtpPort   = parseInt(process.env.SMTP_PORT || "465");
+  const smtpSecure = process.env.SMTP_SECURE !== undefined
+    ? process.env.SMTP_SECURE === "true"
+    : smtpPort === 465;
+
+  function getIfaceIp(ifaceName) {
+    if (!ifaceName) return null;
+    const ifaces = os.networkInterfaces();
+    const entries = ifaces[ifaceName];
+    if (!entries) {
+      console.warn(`SMTP_SOURCE_IFACE="${ifaceName}" not found. Available: ${Object.keys(ifaces).join(", ")}`);
+      return null;
+    }
+    const ipv4 = entries.find(a => a.family === "IPv4" && !a.internal);
+    if (!ipv4) { console.warn(`SMTP_SOURCE_IFACE="${ifaceName}": no IPv4 address found`); return null; }
+    console.log(`SMTP source address: ${ipv4.address} (${ifaceName})`);
+    return ipv4.address;
+  }
+
+  const localAddress =
+    getIfaceIp(process.env.SMTP_SOURCE_IFACE || null) ||
+    process.env.SMTP_SOURCE_IP ||
+    null;
 
   // For SSL (port 465) use the hostname directly so SNI works correctly.
   // For plain/STARTTLS, pre-resolve to IPv4 to handle internal servers that
@@ -55,15 +77,22 @@ if (USE_RESEND) {
     host:              resolvedHost,
     port:              smtpPort,
     secure:            smtpSecure,
-    connectionTimeout: 5_000,
-    greetingTimeout:   5_000,
-    socketTimeout:     5_000,
+    localAddress:      localAddress || undefined,
+    connectionTimeout: 30_000,
+    greetingTimeout:   30_000,
+    socketTimeout:     60_000,
     auth: process.env.SMTP_USER
       ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
       : undefined,
     tls: { servername: smtpHost, rejectUnauthorized: false },
   });
-  console.log("Email: using SMTP");
+  console.log("── SMTP config ───────────────────────────────────");
+  console.log("  host    :", resolvedHost);
+  console.log("  port    :", smtpPort, smtpSecure ? "(SSL)" : "(STARTTLS)");
+  console.log("  user    :", process.env.SMTP_USER || "(none)");
+  console.log("  from    :", MAIL_FROM);
+  console.log("  localIP :", localAddress || "(not bound — any interface)");
+  console.log("──────────────────────────────────────────────────");
 } else {
   console.log("Email: dev mode — links printed to console only");
 }

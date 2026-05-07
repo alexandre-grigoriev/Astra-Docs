@@ -13,7 +13,7 @@ import { config } from '../utils/config.js';
 import { logger } from '../utils/logger.js';
 
 const EMBED_MODEL = 'gemini-embedding-001';
-const GEN_MODEL   = 'gemini-2.0-flash';
+const GEN_MODEL   = 'gemini-2.5-flash';
 const API_BASE    = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 const MAX_INPUT_CHARS = 8000;
